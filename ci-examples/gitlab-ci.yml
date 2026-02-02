@@ -1,0 +1,75 @@
+# GitLab CI Pipeline for Automated PR Accessibility Review
+# Add this to your .gitlab-ci.yml file
+
+stages:
+  - accessibility-review
+
+accessibility-pr-review:
+  stage: accessibility-review
+  image: ubuntu:latest
+
+  # Only run on merge requests
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+  variables:
+    GIT_DEPTH: 0  # Fetch all history for better diff analysis
+
+  before_script:
+    # Install dependencies
+    - apt-get update -qq
+    - apt-get install -y git curl wget
+
+    # Install GitHub CLI (for gh command compatibility)
+    # OR use GitLab API directly
+    - |
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      apt-get update
+      apt-get install gh -y
+
+    # Install Node.js for Claude Code CLI
+    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    - apt-get install -y nodejs
+
+    # Install Claude Code CLI
+    - npm install -g @anthropic/claude-code
+
+    # Setup accessibility audit framework
+    - git clone https://github.com/YOUR_ORG/accessibilityFixer.git /tmp/accessibilityFixer
+    - bash /tmp/accessibilityFixer/setup-audit.sh
+
+  script:
+    # Export environment variables
+    - export CI=true
+    - export GITLAB_CI=true
+    - export MR_NUMBER=$CI_MERGE_REQUEST_IID
+
+    # Authenticate with GitLab API
+    - echo "Reviewing MR !${CI_MERGE_REQUEST_IID}"
+
+    # Run the PR review command
+    # Note: Adapt command to use GitLab API instead of gh CLI
+    - |
+      claude-code "/pr-review $CI_MERGE_REQUEST_IID" || EXIT_CODE=$?
+
+      if [ $EXIT_CODE -eq 1 ]; then
+        echo "❌ Critical accessibility issues found"
+        exit 1
+      elif [ $EXIT_CODE -eq 2 ]; then
+        echo "⚠️ High priority accessibility issues found"
+        exit 0
+      else
+        echo "✅ No critical accessibility issues found"
+        exit 0
+      fi
+
+  artifacts:
+    paths:
+      - ./accessibility-audit/reports/pr/
+    expire_in: 30 days
+    when: always
+
+  # Allow failure for warnings (high priority issues)
+  allow_failure:
+    exit_codes: 2
