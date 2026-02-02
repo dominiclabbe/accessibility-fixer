@@ -143,44 +143,44 @@ The `/pr-review` command provides **automated accessibility review for Pull Requ
 - 💬 **Inline Comments**: Issues posted directly on PR lines
 - 🚦 **Gate Merges**: Block PRs with critical accessibility issues
 
+### 🎯 Multi-Provider AI Support
+
+**Choose the AI provider that works best for you:**
+
+| Provider | Advantages | Setup Difficulty |
+|----------|-----------|------------------|
+| **GitHub Models** | Uses existing GITHUB_TOKEN, no separate API key needed | ⭐ Easy |
+| **Anthropic Claude** | Highest quality (Claude Sonnet 4) | ⭐⭐ Medium |
+| **OpenAI** | GPT-4 available | ⭐⭐ Medium |
+
+**See [MULTI_PROVIDER_GUIDE.md](MULTI_PROVIDER_GUIDE.md) for complete comparison and setup instructions.**
+
 ### Quick Start
 
-**Manual PR Review:**
+**Option 1: GitHub Models (Recommended - Easiest!)**
+
+No separate API key needed - uses your existing GITHUB_TOKEN:
+
 ```bash
-# In Claude Code
-/pr-review              # Auto-detect current branch PR
-/pr-review 123          # Review PR #123
-/pr-review --no-post    # Dry-run without posting comments
+# Copy workflow example
+cp /path/to/accessibility-fixer/ci-examples/github-actions-github-models.yml \
+   .github/workflows/accessibility-pr-review.yml
+
+# That's it! Workflow runs automatically on PRs
 ```
 
-**Automated CI/CD:**
-Add to `.github/workflows/accessibility-pr-review.yml`:
-```yaml
-name: Accessibility PR Review
-on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+**Option 2: Anthropic (Highest Quality)**
 
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run PR Review
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          # Setup (one-time per workflow)
-          gh --version || sudo apt-get install gh
-          npm install -g @anthropic/claude-code
-          git clone https://github.com/YOUR_ORG/accessibilityFixer.git /tmp/a11y
-          bash /tmp/a11y/setup-audit.sh
+```bash
+# Get API key from https://console.anthropic.com/
+gh secret set ANTHROPIC_API_KEY
 
-          # Run review
-          echo "$GITHUB_TOKEN" | gh auth login --with-token
-          claude-code "/pr-review ${{ github.event.pull_request.number }}"
+# Copy workflow example
+cp /path/to/accessibility-fixer/ci-examples/github-actions-anthropic.yml \
+   .github/workflows/accessibility-pr-review.yml
 ```
+
+**See `ci-examples/` directory for complete workflow examples.**
 
 ### What Gets Reviewed
 
@@ -223,28 +223,31 @@ Plus a summary comment with all issues grouped by severity.
 
 ### Documentation
 
+- **Multi-Provider Setup**: [MULTI_PROVIDER_GUIDE.md](MULTI_PROVIDER_GUIDE.md) - Complete guide for all AI providers
+- **API Setup (Anthropic)**: [API_SETUP_GUIDE.md](API_SETUP_GUIDE.md) - Original Anthropic-only setup
 - **Quick Start**: [PR_REVIEW_QUICK_START.md](PR_REVIEW_QUICK_START.md) - 5-minute setup
 - **Full Guide**: [PR_REVIEW_GUIDE.md](PR_REVIEW_GUIDE.md) - Complete documentation
-- **CI Examples**: `ci-examples/` - GitHub Actions, GitLab CI, Bitbucket
+- **CI Examples**: `ci-examples/` - Ready-to-use GitHub Actions workflows
 
-### Prerequisites
+### Configuration
 
-```bash
-# Install GitHub CLI (one-time)
-brew install gh  # macOS
-gh auth login
+**Switching providers is easy - just change one environment variable:**
 
-# Update .claude/settings.local.json permissions
-{
-  "permissions": {
-    "allow": [
-      "Bash(gh:*)",
-      "Bash(git:*)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:api.github.com)"
-    ]
-  }
-}
+```yaml
+# GitHub Models (no separate API key needed)
+env:
+  AI_PROVIDER: github
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# Anthropic
+env:
+  AI_PROVIDER: anthropic
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+# OpenAI
+env:
+  AI_PROVIDER: openai
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
 ### When to Use Which Command
