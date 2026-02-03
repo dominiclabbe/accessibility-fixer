@@ -47,3 +47,14 @@ accessibility-audit/
 archive/
 backup/
 *.bak
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Environment files (contain secrets)
+.env

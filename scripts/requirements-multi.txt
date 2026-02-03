@@ -1,8 +1,0 @@
-# Multi-Provider PR Review Dependencies
-# Install with: pip install -r requirements-multi.txt
-
-# Anthropic Claude API
-anthropic>=0.18.0
-
-# OpenAI / GitHub Models API
-openai>=1.0.0
