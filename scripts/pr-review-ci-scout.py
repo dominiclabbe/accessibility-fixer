@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 #
 # Scout (OpenAI-compatible) Automated PR Accessibility Review Script
+# - Splits review per file to avoid timeouts on large PRs
+# - OpenAI-compatible client via base_url + api_key
 #
 # Required env:
 # - PR_NUMBER
@@ -10,12 +12,14 @@
 #
 # Scout env:
 # - SCOUT_API_KEY
-# - SCOUT_BASE_URL  (OpenAI compatibility base url, must end with /v1)
-# - SCOUT_MODEL     (e.g. gpt-4-1-mini)
+# - SCOUT_BASE_URL  (OpenAI compatibility base url; in your setup it works without /v1)
+# - SCOUT_MODEL     (e.g. gpt-5.2, claude-sonnet-4-5, gpt-4-1-mini)
 #
 # Optional:
-# - SCOUT_MAX_TOKENS (default 8000)
+# - SCOUT_MAX_TOKENS (default 4000)
 # - SCOUT_TEMPERATURE (default 0)
+# - SCOUT_FILES_PER_BATCH (default 1)  # keep 1 for true per-file; >1 batches files per request
+# - SCOUT_MAX_DIFF_CHARS (default 200000)  # truncates overly large diffs per request
 #
 
 import os
@@ -25,22 +29,29 @@ import subprocess
 from pathlib import Path
 
 
+# --- GitHub / CI env ---
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 PR_NUMBER = os.environ.get("PR_NUMBER")
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 FRAMEWORK_PATH = os.environ.get("FRAMEWORK_PATH", "/tmp/accessibility-fixer")
 
+# --- Scout env (OpenAI-compatible) ---
 SCOUT_API_KEY = os.environ.get("SCOUT_API_KEY")
 SCOUT_BASE_URL = os.environ.get("SCOUT_BASE_URL")
 SCOUT_MODEL = os.environ.get("SCOUT_MODEL", "gpt-4-1-mini")
-SCOUT_MAX_TOKENS = int(os.environ.get("SCOUT_MAX_TOKENS", "8000"))
+SCOUT_MAX_TOKENS = int(os.environ.get("SCOUT_MAX_TOKENS", "4000"))
 SCOUT_TEMPERATURE = float(os.environ.get("SCOUT_TEMPERATURE", "0"))
 
+SCOUT_FILES_PER_BATCH = int(os.environ.get("SCOUT_FILES_PER_BATCH", "1"))
+SCOUT_MAX_DIFF_CHARS = int(os.environ.get("SCOUT_MAX_DIFF_CHARS", "200000"))
+
+# Exit codes
 EXIT_SUCCESS = 0
 EXIT_CRITICAL_ISSUES = 1
 EXIT_HIGH_PRIORITY = 2
 
 
+# ---- helpers ----
 def run_command(cmd, capture_output=True):
     result = subprocess.run(
         cmd,
@@ -51,11 +62,31 @@ def run_command(cmd, capture_output=True):
     return result.stdout.strip() if capture_output else None
 
 
-def get_pr_diff():
-    print("Fetching PR #{} diff...".format(PR_NUMBER))
-    return run_command("gh pr diff {}".format(PR_NUMBER))
+def chunk_list(items, size):
+    if size <= 0:
+        size = 1
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
 
 
+def dedupe_issues(issues):
+    seen = set()
+    out = []
+    for i in issues:
+        key = (
+            str(i.get("file", "")),
+            str(i.get("line", "")),
+            str(i.get("title", "")),
+            str(i.get("wcag_sc", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(i)
+    return out
+
+
+# ---- PR data ----
 def get_pr_files():
     print("Getting changed files...")
     files_json = run_command("gh pr view {} --json files".format(PR_NUMBER))
@@ -78,6 +109,32 @@ def detect_platforms(files):
     return list(platforms)
 
 
+def get_pr_base_head_shas():
+    # Prefer GH API values
+    base = run_command('gh pr view {} --json baseRefOid -q .baseRefOid'.format(PR_NUMBER))
+    head = run_command('gh pr view {} --json headRefOid -q .headRefOid'.format(PR_NUMBER))
+
+    # Fallbacks
+    if not head:
+        head = run_command("git rev-parse HEAD")
+    if not base and head:
+        base = run_command("git merge-base {} HEAD~1".format(head)) or run_command("git merge-base {} HEAD".format(head))
+
+    return base, head
+
+
+def get_diff_for_files(base_sha, head_sha, files):
+    # Use three-dot: compares changes on head since merge-base with base
+    # Quote paths safely for shell
+    quoted = " ".join(["'{}'".format(p.replace("'", "'\\''")) for p in files])
+    cmd = "git diff {}...{} -- {}".format(base_sha, head_sha, quoted)
+    diff = run_command(cmd) or ""
+    if len(diff) > SCOUT_MAX_DIFF_CHARS:
+        diff = diff[:SCOUT_MAX_DIFF_CHARS] + "\n\n# [TRUNCATED] Diff exceeded SCOUT_MAX_DIFF_CHARS.\n"
+    return diff
+
+
+# ---- guides + prompt ----
 def load_guides(platforms):
     guides = {}
     framework_path = Path(FRAMEWORK_PATH)
@@ -116,9 +173,9 @@ def load_guides(platforms):
     return guides
 
 
-def create_review_prompt(pr_diff, files, platforms, guides):
+def create_review_prompt(pr_diff, files_in_batch, platforms, guides):
     guides_text = "\n\n".join(["## {}\n\n{}".format(path, content) for path, content in guides.items()])
-    files_list = "\n".join(["- {}".format(f) for f in files])
+    files_list = "\n".join(["- {}".format(f) for f in files_in_batch])
     platforms_list = ", ".join(platforms) if platforms else "Unknown"
 
     parts = []
@@ -126,11 +183,11 @@ def create_review_prompt(pr_diff, files, platforms, guides):
     parts.append("")
     parts.append("# PR Information")
     parts.append("**Platforms detected:** {}".format(platforms_list))
-    parts.append("**Files changed:** {}".format(len(files)))
+    parts.append("**Files in this batch:** {}".format(len(files_in_batch)))
     parts.append(files_list)
     parts.append("")
     parts.append("# Your Task")
-    parts.append("Review ONLY the changed code in this PR for accessibility issues. Focus on:")
+    parts.append("Review ONLY the changed code in this diff for accessibility issues. Focus on:")
     parts.append("1. New UI components - accessibility labels, hints, roles")
     parts.append("2. Modified accessibility properties - ensure no regressions")
     parts.append("3. Interactive elements - buttons/links/inputs must be accessible")
@@ -143,25 +200,27 @@ def create_review_prompt(pr_diff, files, platforms, guides):
     parts.append("# Guidelines to Follow")
     parts.append(guides_text)
     parts.append("")
-    parts.append("# PR Diff")
+    parts.append("# PR Diff (Batch Only)")
     parts.append("```diff")
     parts.append(pr_diff)
     parts.append("```")
     parts.append("")
     parts.append("# Output Format")
     parts.append("Return a JSON array of issues. If none: []")
-    parts.append("Each issue keys: file, line, severity, wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.")
+    parts.append("Each issue MUST include these keys:")
+    parts.append('file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.')
     parts.append("")
     parts.append("IMPORTANT:")
-    parts.append("- Only issues in CHANGED code")
-    parts.append("- Do NOT report unchanged code")
-    parts.append("- Accessibility only")
+    parts.append("- Only report issues found in the CHANGED code shown in this diff batch")
+    parts.append("- Do NOT report issues in unchanged code")
+    parts.append("- Focus on accessibility only")
     parts.append("- Be specific with file paths and line numbers")
     parts.append("- Provide actionable fixes")
 
     return "\n".join(parts)
 
 
+# ---- Scout call ----
 def parse_json_response(response_text):
     if "```json" in response_text:
         start = response_text.find("```json") + 7
@@ -173,14 +232,17 @@ def parse_json_response(response_text):
         response_text = response_text[start:end].strip()
 
     try:
-        return json.loads(response_text)
+        data = json.loads(response_text)
+        if isinstance(data, list):
+            return data
+        return []
     except json.JSONDecodeError as e:
         print("Error parsing JSON response: {}".format(e))
         print("Response was: {}...".format(response_text[:800]))
         return []
 
 
-def review_pr_with_scout(prompt):
+def review_with_scout(prompt):
     try:
         import openai
     except ImportError:
@@ -191,12 +253,8 @@ def review_pr_with_scout(prompt):
         print("Error: SCOUT_API_KEY not set")
         sys.exit(1)
     if not SCOUT_BASE_URL:
-        print("Error: SCOUT_BASE_URL not set (must end with /v1)")
+        print("Error: SCOUT_BASE_URL not set")
         sys.exit(1)
-
-    print("Analyzing with Scout (OpenAI-compatible)...")
-    print("Base URL: {}".format(SCOUT_BASE_URL))
-    print("Model: {}".format(SCOUT_MODEL))
 
     client = openai.OpenAI(
         api_key=SCOUT_API_KEY,
@@ -214,6 +272,7 @@ def review_pr_with_scout(prompt):
     return parse_json_response(text)
 
 
+# ---- commenting ----
 def format_issue_comment(issue):
     severity_emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
     emoji = severity_emoji.get(issue.get("severity"), "⚪")
@@ -222,12 +281,14 @@ def format_issue_comment(issue):
     if issue.get("resources"):
         resources = "\n\n**Resources:**\n" + "\n".join(["- {}".format(u) for u in issue["resources"]])
 
+    loc = "{}:{}".format(issue.get("file", ""), issue.get("line", ""))
+
     lines = []
     lines.append("## {} Accessibility Issue: {}".format(emoji, issue.get("title", "")))
     lines.append("")
     lines.append("**WCAG SC:** {} (Level {})".format(issue.get("wcag_sc", ""), issue.get("wcag_level", "")))
     lines.append("**Severity:** {}".format(issue.get("severity", "")))
-    lines.append("**Location:** `{}`".format("{}:{}".format(issue.get("file", ""), issue.get("line", ""))))
+    lines.append("**Location:** `{}`".format(loc))
     lines.append("")
     lines.append("**Issue:**")
     lines.append(issue.get("description", ""))
@@ -249,18 +310,17 @@ def format_issue_comment(issue):
     lines.append("")
     lines.append("---")
     lines.append("Automated by accessibility-fixer using Scout ({})".format(SCOUT_MODEL))
-
     return "\n".join(lines)
 
 
-def post_summary_comment(issues):
+def post_summary_comment(issues, total_files):
     if not issues:
         summary_lines = [
             "## ✅ Accessibility Review Complete",
             "",
             "**No accessibility issues found!**",
             "",
-            "**Files reviewed:** {}".format(len(get_pr_files())),
+            "**Files reviewed:** {}".format(total_files),
             "",
             "---",
             "Automated by accessibility-fixer",
@@ -290,7 +350,7 @@ def post_summary_comment(issues):
 
         summary_lines += [
             "",
-            "**Files Reviewed:** {}".format(len(get_pr_files())),
+            "**Files reviewed:** {}".format(total_files),
             "",
             "---",
             "Automated by accessibility-fixer",
@@ -303,21 +363,14 @@ def post_summary_comment(issues):
     run_command('gh pr comment {} --body "{}"'.format(PR_NUMBER, escaped))
 
 
-def post_pr_comments(issues):
-    if not issues:
-        print("No accessibility issues found.")
-        post_summary_comment(issues)
-        return EXIT_SUCCESS
-
-    print("Posting {} issue(s) to PR...".format(len(issues)))
-
+def post_issue_comments(issues):
     for issue in issues:
         comment = format_issue_comment(issue)
         escaped_comment = comment.replace('"', '\\"').replace("\n", "\\n")
         run_command('gh pr comment {} --body "{}"'.format(PR_NUMBER, escaped_comment))
 
-    post_summary_comment(issues)
 
+def exit_code_for_issues(issues):
     if any(i.get("severity") == "Critical" for i in issues):
         return EXIT_CRITICAL_ISSUES
     if any(i.get("severity") == "High" for i in issues):
@@ -325,9 +378,10 @@ def post_pr_comments(issues):
     return EXIT_SUCCESS
 
 
+# ---- main ----
 def main():
     print("=" * 60)
-    print("Scout PR Accessibility Review")
+    print("Scout PR Accessibility Review (split by file)")
     print("=" * 60)
 
     if not PR_NUMBER:
@@ -343,24 +397,73 @@ def main():
         print("Error: SCOUT_BASE_URL not set")
         sys.exit(1)
 
-    pr_diff = get_pr_diff()
+    print("Repo: {}".format(GITHUB_REPOSITORY))
+    print("Framework path: {}".format(FRAMEWORK_PATH))
+    print("Scout base URL: {}".format(SCOUT_BASE_URL))
+    print("Model: {}".format(SCOUT_MODEL))
+    print("Files per batch: {}".format(SCOUT_FILES_PER_BATCH))
+    print("Max diff chars: {}".format(SCOUT_MAX_DIFF_CHARS))
+    print("")
+
     files = get_pr_files()
     platforms = detect_platforms(files)
 
     print("Platforms: {}".format(", ".join(platforms) if platforms else "None detected"))
     print("Files changed: {}".format(len(files)))
-    print("Framework path: {}".format(FRAMEWORK_PATH))
-    print("Repo: {}".format(GITHUB_REPOSITORY))
+
+    base_sha, head_sha = get_pr_base_head_shas()
+    if not base_sha or not head_sha:
+        print("Error: Could not determine base/head SHAs for diff splitting")
+        sys.exit(1)
+
+    print("Base SHA: {}".format(base_sha))
+    print("Head SHA: {}".format(head_sha))
+    print("")
 
     guides = load_guides(platforms)
     print("Loaded {} guide(s)".format(len(guides)))
+    print("")
 
-    prompt = create_review_prompt(pr_diff, files, platforms, guides)
-    issues = review_pr_with_scout(prompt)
+    all_issues = []
+    batches = list(chunk_list(files, SCOUT_FILES_PER_BATCH))
+    print("Splitting into {} batch(es)...".format(len(batches)))
+    print("")
 
-    print("Review complete: {} issue(s) found".format(len(issues)))
-    exit_code = post_pr_comments(issues)
-    sys.exit(exit_code)
+    for idx, batch in enumerate(batches, start=1):
+        print("Batch {}/{}: reviewing {} file(s)".format(idx, len(batches), len(batch)))
+        diff = get_diff_for_files(base_sha, head_sha, batch)
+
+        if not diff.strip():
+            print(" - Skipping (empty diff)")
+            continue
+
+        prompt = create_review_prompt(diff, batch, platforms, guides)
+        batch_issues = review_with_scout(prompt) or []
+        print(" - Issues found in batch: {}".format(len(batch_issues)))
+        all_issues.extend(batch_issues)
+
+    issues = dedupe_issues(all_issues)
+    print("")
+    print("Aggregated issues (deduped): {}".format(len(issues)))
+
+    if issues:
+        print("Posting issue comments...")
+        post_issue_comments(issues)
+    else:
+        print("No issues to post.")
+
+    print("Posting summary comment...")
+    post_summary_comment(issues, total_files=len(files))
+
+    code = exit_code_for_issues(issues)
+    if code == EXIT_CRITICAL_ISSUES:
+        print("CRITICAL issues found - blocking merge")
+    elif code == EXIT_HIGH_PRIORITY:
+        print("HIGH priority issues found")
+    else:
+        print("Review complete - OK")
+
+    sys.exit(code)
 
 
 if __name__ == "__main__":
