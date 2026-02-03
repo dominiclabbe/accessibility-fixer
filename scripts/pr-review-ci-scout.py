@@ -2,7 +2,8 @@
 #
 # Scout (OpenAI-compatible) Automated PR Accessibility Review Script
 # - Splits review per file to avoid timeouts on large PRs
-# - OpenAI-compatible client via base_url + api_key
+# - Retries on transient 5xx / 504 Gateway Timeout (CloudFront)
+# - Forces strict JSON output and normalizes common schema deviations
 #
 # Required env:
 # - PR_NUMBER
@@ -16,10 +17,12 @@
 # - SCOUT_MODEL     (e.g. gpt-5.2, claude-sonnet-4-5, gpt-4-1-mini)
 #
 # Optional:
-# - SCOUT_MAX_TOKENS (default 4000)
+# - SCOUT_MAX_TOKENS (default 2500)
 # - SCOUT_TEMPERATURE (default 0)
-# - SCOUT_FILES_PER_BATCH (default 1)  # keep 1 for true per-file; >1 batches files per request
-# - SCOUT_MAX_DIFF_CHARS (default 200000)  # truncates overly large diffs per request
+# - SCOUT_FILES_PER_BATCH (default 1)  # keep 1 for true per-file
+# - SCOUT_MAX_DIFF_CHARS (default 180000)  # truncates overly large diffs per request
+# - SCOUT_MAX_SNIPPET_LINES (default 30)   # clamp code snippets (current_code / suggested_fix)
+# - SCOUT_RETRY_ATTEMPTS (default 4)
 #
 
 import os
@@ -39,11 +42,15 @@ FRAMEWORK_PATH = os.environ.get("FRAMEWORK_PATH", "/tmp/accessibility-fixer")
 SCOUT_API_KEY = os.environ.get("SCOUT_API_KEY")
 SCOUT_BASE_URL = os.environ.get("SCOUT_BASE_URL")
 SCOUT_MODEL = os.environ.get("SCOUT_MODEL", "gpt-4-1-mini")
-SCOUT_MAX_TOKENS = int(os.environ.get("SCOUT_MAX_TOKENS", "4000"))
+
+SCOUT_MAX_TOKENS = int(os.environ.get("SCOUT_MAX_TOKENS", "2500"))
 SCOUT_TEMPERATURE = float(os.environ.get("SCOUT_TEMPERATURE", "0"))
 
 SCOUT_FILES_PER_BATCH = int(os.environ.get("SCOUT_FILES_PER_BATCH", "1"))
-SCOUT_MAX_DIFF_CHARS = int(os.environ.get("SCOUT_MAX_DIFF_CHARS", "200000"))
+SCOUT_MAX_DIFF_CHARS = int(os.environ.get("SCOUT_MAX_DIFF_CHARS", "180000"))
+SCOUT_MAX_SNIPPET_LINES = int(os.environ.get("SCOUT_MAX_SNIPPET_LINES", "30"))
+
+SCOUT_RETRY_ATTEMPTS = int(os.environ.get("SCOUT_RETRY_ATTEMPTS", "4"))
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -60,6 +67,11 @@ def run_command(cmd, capture_output=True):
         text=True,
     )
     return result.stdout.strip() if capture_output else None
+
+
+def sleep_seconds(seconds):
+    # Keep it shell-based to avoid any runner weirdness
+    run_command("sleep {}".format(int(seconds)), capture_output=False)
 
 
 def chunk_list(items, size):
@@ -86,6 +98,64 @@ def dedupe_issues(issues):
     return out
 
 
+def clamp_lines(text, max_lines):
+    if not isinstance(text, str):
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    return "\n".join(lines[:max_lines]) + "\n... [truncated]"
+
+
+def normalize_issue(issue):
+    # Ensure a consistent schema to prevent KeyErrors later
+    if not isinstance(issue, dict):
+        return None
+
+    normalized = dict(issue)
+
+    # wcag_sc sometimes comes back as a list; convert to a single string
+    wcag_sc = normalized.get("wcag_sc", "")
+    if isinstance(wcag_sc, list):
+        normalized["wcag_sc"] = "; ".join([str(x) for x in wcag_sc])
+    elif wcag_sc is None:
+        normalized["wcag_sc"] = ""
+    else:
+        normalized["wcag_sc"] = str(wcag_sc)
+
+    # Ensure wcag_level is a string
+    wcag_level = normalized.get("wcag_level", "")
+    normalized["wcag_level"] = "" if wcag_level is None else str(wcag_level)
+
+    # Ensure severity/title/file are strings
+    for k in ["file", "severity", "title", "description", "impact"]:
+        v = normalized.get(k, "")
+        normalized[k] = "" if v is None else str(v)
+
+    # line should be an int if possible
+    line = normalized.get("line", 0)
+    try:
+        normalized["line"] = int(line)
+    except Exception:
+        normalized["line"] = 0
+
+    # resources should be a list of strings
+    resources = normalized.get("resources", [])
+    if resources is None:
+        resources = []
+    if isinstance(resources, str):
+        resources = [resources]
+    if not isinstance(resources, list):
+        resources = []
+    normalized["resources"] = [str(x) for x in resources]
+
+    # Clamp code snippets (defensive; prompt also asks for it)
+    normalized["current_code"] = clamp_lines(normalized.get("current_code", ""), SCOUT_MAX_SNIPPET_LINES)
+    normalized["suggested_fix"] = clamp_lines(normalized.get("suggested_fix", ""), SCOUT_MAX_SNIPPET_LINES)
+
+    return normalized
+
+
 # ---- PR data ----
 def get_pr_files():
     print("Getting changed files...")
@@ -110,7 +180,6 @@ def detect_platforms(files):
 
 
 def get_pr_base_head_shas():
-    # Prefer GH API values
     base = run_command('gh pr view {} --json baseRefOid -q .baseRefOid'.format(PR_NUMBER))
     head = run_command('gh pr view {} --json headRefOid -q .headRefOid'.format(PR_NUMBER))
 
@@ -118,14 +187,13 @@ def get_pr_base_head_shas():
     if not head:
         head = run_command("git rev-parse HEAD")
     if not base and head:
-        base = run_command("git merge-base {} HEAD~1".format(head)) or run_command("git merge-base {} HEAD".format(head))
+        # Try merge-base against origin if available; otherwise best effort
+        base = run_command("git merge-base {} origin/HEAD".format(head)) or run_command("git merge-base {} HEAD~1".format(head))
 
     return base, head
 
 
 def get_diff_for_files(base_sha, head_sha, files):
-    # Use three-dot: compares changes on head since merge-base with base
-    # Quote paths safely for shell
     quoted = " ".join(["'{}'".format(p.replace("'", "'\\''")) for p in files])
     cmd = "git diff {}...{} -- {}".format(base_sha, head_sha, quoted)
     diff = run_command(cmd) or ""
@@ -182,22 +250,15 @@ def create_review_prompt(pr_diff, files_in_batch, platforms, guides):
     parts.append("You are performing an automated accessibility review on a GitHub Pull Request.")
     parts.append("")
     parts.append("# PR Information")
-    parts.append("**Platforms detected:** {}".format(platforms_list))
-    parts.append("**Files in this batch:** {}".format(len(files_in_batch)))
+    parts.append("Platforms detected: {}".format(platforms_list))
+    parts.append("Files in this batch: {}".format(len(files_in_batch)))
     parts.append(files_list)
     parts.append("")
-    parts.append("# Your Task")
-    parts.append("Review ONLY the changed code in this diff for accessibility issues. Focus on:")
-    parts.append("1. New UI components - accessibility labels, hints, roles")
-    parts.append("2. Modified accessibility properties - ensure no regressions")
-    parts.append("3. Interactive elements - buttons/links/inputs must be accessible")
-    parts.append("4. Images/icons - alt text / content descriptions")
-    parts.append("5. Text and labels - semantic structure and clarity")
-    parts.append("6. Form inputs - labels, hints, error messages")
-    parts.append("7. Touch targets - minimum size")
-    parts.append("8. Contrast - text and UI elements")
+    parts.append("# Task")
+    parts.append("Review ONLY the changed code in this diff for accessibility issues.")
+    parts.append("Focus on labels/hints/roles, interactive elements, images/icons alt text, form inputs, touch targets, Dynamic Type/font scaling, semantics, and contrast.")
     parts.append("")
-    parts.append("# Guidelines to Follow")
+    parts.append("# Guidelines")
     parts.append(guides_text)
     parts.append("")
     parts.append("# PR Diff (Batch Only)")
@@ -205,41 +266,62 @@ def create_review_prompt(pr_diff, files_in_batch, platforms, guides):
     parts.append(pr_diff)
     parts.append("```")
     parts.append("")
-    parts.append("# Output Format")
-    parts.append("Return a JSON array of issues. If none: []")
-    parts.append("Each issue MUST include these keys:")
+    parts.append("# Output Format (STRICT)")
+    parts.append("Return ONLY a valid JSON array. No markdown. No prose. No code fences.")
+    parts.append("If no issues found, return: []")
+    parts.append("")
+    parts.append("Each issue must have these keys (all values MUST be strings, except line which must be a number):")
     parts.append('file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.')
     parts.append("")
-    parts.append("IMPORTANT:")
-    parts.append("- Only report issues found in the CHANGED code shown in this diff batch")
-    parts.append("- Do NOT report issues in unchanged code")
-    parts.append("- Focus on accessibility only")
-    parts.append("- Be specific with file paths and line numbers")
-    parts.append("- Provide actionable fixes")
+    parts.append("Rules:")
+    parts.append("- Report issues ONLY in the CHANGED code shown in this batch diff.")
+    parts.append("- wcag_sc MUST be a single string. If multiple SC apply, join with '; '.")
+    parts.append("- current_code and suggested_fix must be short snippets (max {} lines each).".format(SCOUT_MAX_SNIPPET_LINES))
+    parts.append("- resources MUST be an array of strings (or empty array []).")
+    parts.append("- Do not invent line numbers; if unsure, pick the closest changed line.")
 
     return "\n".join(parts)
 
 
 # ---- Scout call ----
 def parse_json_response(response_text):
-    if "```json" in response_text:
-        start = response_text.find("```json") + 7
-        end = response_text.find("```", start)
-        response_text = response_text[start:end].strip()
-    elif "```" in response_text:
-        start = response_text.find("```") + 3
-        end = response_text.find("```", start)
-        response_text = response_text[start:end].strip()
-
+    # Try direct JSON parse
     try:
         data = json.loads(response_text)
-        if isinstance(data, list):
-            return data
-        return []
-    except json.JSONDecodeError as e:
-        print("Error parsing JSON response: {}".format(e))
-        print("Response was: {}...".format(response_text[:800]))
-        return []
+        return data if isinstance(data, list) else []
+    except Exception:
+        pass
+
+    # Try to extract first [...] block
+    start = response_text.find("[")
+    end = response_text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        candidate = response_text[start : end + 1]
+        try:
+            data = json.loads(candidate)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            print("Error parsing extracted JSON: {}".format(e))
+            print("Extracted snippet: {}...".format(candidate[:800]))
+            return []
+
+    print("Error parsing JSON response (no JSON array found).")
+    print("Raw response (first 800 chars): {}...".format(response_text[:800]))
+    return []
+
+
+def is_transient_error_message(msg):
+    m = msg.lower()
+    return (
+        ("504" in msg)
+        or ("gateway timeout" in m)
+        or ("cloudfront" in m)
+        or ("internalservererror" in m)
+        or ("502" in msg)
+        or ("503" in msg)
+        or ("server error" in m)
+        or ("timed out" in m)
+    )
 
 
 def review_with_scout(prompt):
@@ -261,47 +343,68 @@ def review_with_scout(prompt):
         base_url=SCOUT_BASE_URL,
     )
 
-    response = client.chat.completions.create(
-        model=SCOUT_MODEL,
-        max_tokens=SCOUT_MAX_TOKENS,
-        temperature=SCOUT_TEMPERATURE,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    delays = [5, 15, 45, 90, 180]
 
-    text = response.choices[0].message.content or ""
-    return parse_json_response(text)
+    last_exc = None
+    for attempt in range(SCOUT_RETRY_ATTEMPTS):
+        try:
+            response = client.chat.completions.create(
+                model=SCOUT_MODEL,
+                max_tokens=SCOUT_MAX_TOKENS,
+                temperature=SCOUT_TEMPERATURE,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.choices[0].message.content or ""
+            return parse_json_response(text)
+
+        except Exception as e:
+            last_exc = e
+            msg = str(e)
+
+            if attempt < SCOUT_RETRY_ATTEMPTS - 1 and is_transient_error_message(msg):
+                wait = delays[attempt] if attempt < len(delays) else 60
+                print("Transient error from Scout (attempt {}/{}). Will retry in {}s.".format(attempt + 1, SCOUT_RETRY_ATTEMPTS, wait))
+                print("Error snippet: {}".format(msg[:220]))
+                sleep_seconds(wait)
+                continue
+
+            # Not transient or out of retries
+            raise
+
+    # Shouldn't reach here, but just in case
+    raise last_exc
 
 
 # ---- commenting ----
 def format_issue_comment(issue):
     severity_emoji = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🔵"}
     emoji = severity_emoji.get(issue.get("severity"), "⚪")
+    loc = "{}:{}".format(issue.get("file", ""), issue.get("line", ""))
 
     resources = ""
-    if issue.get("resources"):
-        resources = "\n\n**Resources:**\n" + "\n".join(["- {}".format(u) for u in issue["resources"]])
-
-    loc = "{}:{}".format(issue.get("file", ""), issue.get("line", ""))
+    res_list = issue.get("resources") or []
+    if res_list:
+        resources = "\n\nResources:\n" + "\n".join(["- {}".format(u) for u in res_list])
 
     lines = []
     lines.append("## {} Accessibility Issue: {}".format(emoji, issue.get("title", "")))
     lines.append("")
-    lines.append("**WCAG SC:** {} (Level {})".format(issue.get("wcag_sc", ""), issue.get("wcag_level", "")))
-    lines.append("**Severity:** {}".format(issue.get("severity", "")))
-    lines.append("**Location:** `{}`".format(loc))
+    lines.append("WCAG SC: {} (Level {})".format(issue.get("wcag_sc", ""), issue.get("wcag_level", "")))
+    lines.append("Severity: {}".format(issue.get("severity", "")))
+    lines.append("Location: `{}`".format(loc))
     lines.append("")
-    lines.append("**Issue:**")
+    lines.append("Issue:")
     lines.append(issue.get("description", ""))
     lines.append("")
-    lines.append("**Impact:**")
+    lines.append("Impact:")
     lines.append(issue.get("impact", ""))
     lines.append("")
-    lines.append("**Current code:**")
+    lines.append("Current code:")
     lines.append("```")
     lines.append(issue.get("current_code", ""))
     lines.append("```")
     lines.append("")
-    lines.append("**Suggested fix:**")
+    lines.append("Suggested fix:")
     lines.append("```")
     lines.append(issue.get("suggested_fix", ""))
     lines.append("```")
@@ -318,12 +421,11 @@ def post_summary_comment(issues, total_files):
         summary_lines = [
             "## ✅ Accessibility Review Complete",
             "",
-            "**No accessibility issues found!**",
+            "No accessibility issues found.",
             "",
-            "**Files reviewed:** {}".format(total_files),
+            "Files reviewed: {}".format(total_files),
             "",
             "---",
-            "Automated by accessibility-fixer",
             "Reviewed: {}".format(run_command('date -u +"%Y-%m-%d %H:%M UTC"')),
             "Powered by: Scout ({})".format(SCOUT_MODEL),
         ]
@@ -337,23 +439,22 @@ def post_summary_comment(issues, total_files):
         summary_lines = [
             "## 🔍 Accessibility Review Summary",
             "",
-            "**Total Issues Found:** {}".format(len(issues)),
-            "- 🔴 Critical: {}".format(len(critical)),
-            "- 🟠 High: {}".format(len(high)),
-            "- 🟡 Medium: {}".format(len(medium)),
-            "- 🔵 Low: {}".format(len(low)),
+            "Total Issues Found: {}".format(len(issues)),
+            "- Critical: {}".format(len(critical)),
+            "- High: {}".format(len(high)),
+            "- Medium: {}".format(len(medium)),
+            "- Low: {}".format(len(low)),
             "",
-            "**WCAG Success Criteria Affected:**",
+            "WCAG Success Criteria Affected:",
         ]
-        for sc in wcag_scs[:10]:
+        for sc in wcag_scs[:12]:
             summary_lines.append("- {}".format(sc))
 
         summary_lines += [
             "",
-            "**Files reviewed:** {}".format(total_files),
+            "Files reviewed: {}".format(total_files),
             "",
             "---",
-            "Automated by accessibility-fixer",
             "Reviewed: {}".format(run_command('date -u +"%Y-%m-%d %H:%M UTC"')),
             "Powered by: Scout ({})".format(SCOUT_MODEL),
         ]
@@ -381,7 +482,7 @@ def exit_code_for_issues(issues):
 # ---- main ----
 def main():
     print("=" * 60)
-    print("Scout PR Accessibility Review (split by file)")
+    print("Scout PR Accessibility Review (split by file, retries, strict JSON)")
     print("=" * 60)
 
     if not PR_NUMBER:
@@ -403,6 +504,8 @@ def main():
     print("Model: {}".format(SCOUT_MODEL))
     print("Files per batch: {}".format(SCOUT_FILES_PER_BATCH))
     print("Max diff chars: {}".format(SCOUT_MAX_DIFF_CHARS))
+    print("Max snippet lines: {}".format(SCOUT_MAX_SNIPPET_LINES))
+    print("Retry attempts: {}".format(SCOUT_RETRY_ATTEMPTS))
     print("")
 
     files = get_pr_files()
@@ -438,9 +541,23 @@ def main():
             continue
 
         prompt = create_review_prompt(diff, batch, platforms, guides)
-        batch_issues = review_with_scout(prompt) or []
-        print(" - Issues found in batch: {}".format(len(batch_issues)))
-        all_issues.extend(batch_issues)
+
+        try:
+            raw_issues = review_with_scout(prompt) or []
+        except Exception as e:
+            # Do not fail the whole run on one file; log and continue
+            print(" - ERROR reviewing batch {}: {}".format(idx, str(e)[:240]))
+            print(" - Continuing to next batch.")
+            continue
+
+        normalized_batch_issues = []
+        for it in raw_issues:
+            n = normalize_issue(it)
+            if n:
+                normalized_batch_issues.append(n)
+
+        print(" - Issues found in batch: {}".format(len(normalized_batch_issues)))
+        all_issues.extend(normalized_batch_issues)
 
     issues = dedupe_issues(all_issues)
     print("")
