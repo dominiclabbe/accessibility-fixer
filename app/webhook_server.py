@@ -15,7 +15,7 @@ import requests
 from dotenv import load_dotenv
 
 # Load .env file from project root
-env_path = Path(__file__).parent.parent / '.env'
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 from app.github_app_auth import create_auth_from_env
@@ -23,7 +23,6 @@ from app.guide_loader import GuideLoader
 from app.pr_reviewer import create_reviewer_from_env, PRReviewer
 from app.comment_poster import CommentPoster
 from app.sarif_generator import generate_and_write_sarif
-
 
 # Configure logging
 logging.basicConfig(
@@ -66,7 +65,7 @@ def filter_reviewable_files(files: list) -> list:
     - Build/config files (gradle, json, yaml, plist, properties, etc.)
     - Project files (xcodeproj, xcworkspace, etc.)
     - CI/CD files (.github/workflows/*)
-    
+
     Special handling for XML:
     - Include: Android layout files (res/layout/**/*.xml)
     - Exclude: AndroidManifest.xml, config XMLs, gradle XMLs
@@ -79,109 +78,118 @@ def filter_reviewable_files(files: list) -> list:
     """
     excluded_extensions = {
         # Documentation
-        '.md',
-        '.txt',
-
+        ".md",
+        ".txt",
         # Build/config files
-        '.gradle',
-        '.properties',
-        '.json',        # Config files (google-services.json, etc.)
-        '.yaml',
-        '.yml',
-        '.plist',       # iOS config
-
+        ".gradle",
+        ".properties",
+        ".json",  # Config files (google-services.json, etc.)
+        ".yaml",
+        ".yml",
+        ".plist",  # iOS config
         # Project/IDE files
-        '.pbxproj',     # Xcode project
-        '.xcworkspace',
-        '.xcscheme',
-
+        ".pbxproj",  # Xcode project
+        ".xcworkspace",
+        ".xcscheme",
         # Other
-        '.gitignore',
-        '.disabled',
+        ".gitignore",
+        ".disabled",
     }
 
     excluded_directories = {
-        '.github',          # GitHub workflows and config
-        'gradle/wrapper',   # Gradle wrapper files
-        '.xcodeproj',       # Xcode project directory
-        '.xcworkspace',     # Xcode workspace
-        'build',            # Build output
-        'dist',             # Distribution files
+        ".github",  # GitHub workflows and config
+        "gradle/wrapper",  # Gradle wrapper files
+        ".xcodeproj",  # Xcode project directory
+        ".xcworkspace",  # Xcode workspace
+        "build",  # Build output
+        "dist",  # Distribution files
     }
 
     excluded_filenames = {
-        'gradle.properties',
-        'gradlew',
-        'gradlew.bat',
-        'google-services.json',
-        'Info.plist',
-        'Podfile',
-        'Podfile.lock',
-        'AndroidManifest.xml',  # Exclude Android manifest
+        "gradle.properties",
+        "gradlew",
+        "gradlew.bat",
+        "google-services.json",
+        "Info.plist",
+        "Podfile",
+        "Podfile.lock",
+        "AndroidManifest.xml",  # Exclude Android manifest
     }
 
     excluded_patterns = [
-        'settings.gradle',
-        '.gradle.kts',
-        '/wrapper/',        # Gradle wrapper
+        "settings.gradle",
+        ".gradle.kts",
+        "/wrapper/",  # Gradle wrapper
     ]
-    
+
     # XML files to exclude (config/build files)
     excluded_xml_patterns = [
-        '/res/values/',      # String/color/dimen resources
-        '/res/drawable/',    # Drawable resources
-        '/res/mipmap/',      # Mipmap resources
-        '/res/xml/',         # XML preferences/configs
-        '/res/raw/',         # Raw resources
-        '/res/menu/',        # Menu resources
-        '/res/anim/',        # Animation resources
-        '/res/animator/',    # Animator resources
-        '/res/color/',       # Color state lists
-        '/res/font/',        # Font resources
-        'gradle/',           # Gradle build files
-        'maven/',            # Maven build files
+        "/res/values/",  # String/color/dimen resources
+        "/res/drawable/",  # Drawable resources
+        "/res/mipmap/",  # Mipmap resources
+        "/res/xml/",  # XML preferences/configs
+        "/res/raw/",  # Raw resources
+        "/res/menu/",  # Menu resources
+        "/res/anim/",  # Animation resources
+        "/res/animator/",  # Animator resources
+        "/res/color/",  # Color state lists
+        "/res/font/",  # Font resources
+        "gradle/",  # Gradle build files
+        "maven/",  # Maven build files
     ]
 
     reviewable = []
     for file_path in files:
-        filename = file_path.split('/')[-1]
+        filename = file_path.split("/")[-1]
 
         # Check if file is in excluded directory
-        if any(f'/{excluded_dir}/' in file_path or file_path.startswith(f'{excluded_dir}/')
-               for excluded_dir in excluded_directories):
-            logger.info(f"Skipping non-reviewable file: {file_path} (excluded directory)")
+        if any(
+            f"/{excluded_dir}/" in file_path or file_path.startswith(f"{excluded_dir}/")
+            for excluded_dir in excluded_directories
+        ):
+            logger.info(
+                f"Skipping non-reviewable file: {file_path} (excluded directory)"
+            )
             continue
 
         # Special handling for XML files
-        if file_path.endswith('.xml'):
+        if file_path.endswith(".xml"):
             # Check if it's an excluded filename
             if filename in excluded_filenames:
-                logger.info(f"Skipping non-reviewable file: {file_path} (excluded XML file)")
+                logger.info(
+                    f"Skipping non-reviewable file: {file_path} (excluded XML file)"
+                )
                 continue
-            
+
             # Check if it's in an excluded XML directory
             if any(pattern in file_path for pattern in excluded_xml_patterns):
-                logger.info(f"Skipping non-reviewable file: {file_path} (excluded XML type)")
+                logger.info(
+                    f"Skipping non-reviewable file: {file_path} (excluded XML type)"
+                )
                 continue
-            
+
             # Include Android layout XML files
-            if '/res/layout/' in file_path or '/res/layout-' in file_path:
+            if "/res/layout/" in file_path or "/res/layout-" in file_path:
                 logger.info(f"Including Android layout file: {file_path}")
                 reviewable.append(file_path)
                 continue
-            
+
             # Exclude other XML files
             logger.info(f"Skipping non-reviewable file: {file_path} (non-layout XML)")
             continue
 
         # Check file extension
         if any(file_path.endswith(ext) for ext in excluded_extensions):
-            logger.info(f"Skipping non-reviewable file: {file_path} (excluded extension)")
+            logger.info(
+                f"Skipping non-reviewable file: {file_path} (excluded extension)"
+            )
             continue
 
         # Check exact filename matches
         if filename in excluded_filenames:
-            logger.info(f"Skipping non-reviewable file: {file_path} (excluded filename)")
+            logger.info(
+                f"Skipping non-reviewable file: {file_path} (excluded filename)"
+            )
             continue
 
         # Check pattern matches
@@ -232,7 +240,12 @@ def verify_webhook_signature(payload_body: bytes, signature_header: str) -> bool
 
 
 def get_pr_diff(
-    repo_owner: str, repo_name: str, pr_number: int, base_sha: str, head_sha: str, headers: dict
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+    headers: dict,
 ) -> str:
     """
     Get PR diff from GitHub API.
@@ -265,11 +278,13 @@ def get_pr_diff(
 @app.route("/", methods=["GET"])
 def index():
     """Health check endpoint."""
-    return jsonify({
-        "status": "ok",
-        "service": "accessibility-reviewer",
-        "version": "1.0.0",
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "accessibility-reviewer",
+            "version": "1.0.0",
+        }
+    )
 
 
 @app.route("/health", methods=["GET"])
@@ -283,10 +298,12 @@ def health():
 
     all_ok = all(checks.values())
 
-    return jsonify({
-        "status": "healthy" if all_ok else "degraded",
-        "checks": checks,
-    }), 200 if all_ok else 503
+    return jsonify(
+        {
+            "status": "healthy" if all_ok else "degraded",
+            "checks": checks,
+        }
+    ), (200 if all_ok else 503)
 
 
 @app.route("/webhook", methods=["POST"])
@@ -383,7 +400,9 @@ def handle_pull_request(payload: dict):
         # Filter out non-reviewable files (docs, build config, etc.)
         changed_files = filter_reviewable_files(all_files)
 
-        logger.info(f"Changed files: {len(changed_files)} (filtered from {len(all_files)} total)")
+        logger.info(
+            f"Changed files: {len(changed_files)} (filtered from {len(all_files)} total)"
+        )
 
         # Exit early if no reviewable files
         if not changed_files:
@@ -409,7 +428,9 @@ def handle_pull_request(payload: dict):
 
         # Get PR diff
         logger.info("Fetching PR diff...")
-        pr_diff = get_pr_diff(repo_owner, repo_name, pr_number, base_sha, head_sha, headers)
+        pr_diff = get_pr_diff(
+            repo_owner, repo_name, pr_number, base_sha, head_sha, headers
+        )
         logger.info(f"Diff size: {len(pr_diff)} characters")
 
         # Track all issues and posted locations for final status
@@ -425,18 +446,47 @@ def handle_pull_request(payload: dict):
         review_threads = comment_poster.get_review_threads(
             repo_owner, repo_name, pr_number, headers
         )
-        logger.info(f"Found {len(review_threads)} review threads (for resolution validation)")
+        logger.info(
+            f"Found {len(review_threads)} review threads (for resolution validation)"
+        )
 
-        def is_near_existing_comment(file_path: str, line: int, range_threshold: int = 5) -> bool:
+        def is_near_existing_comment(
+            file_path: str, line: int, range_threshold: int = 5
+        ) -> bool:
             """
             Check if a location is near any existing comment (within ±range_threshold lines).
             This handles cases where Scout AI returns slightly different line numbers for the same issue,
             or when multiple related issues exist nearby that should have been consolidated.
+
+            Supports multiple entry shapes in posted_locations:
+            - 2-tuples: (file, line)
+            - 3+ tuples: (file, line, ...) - uses first two
+            - dicts: {'file': ..., 'line': ...} or {'path': ..., 'line': ...}
+            - Malformed entries are skipped safely
             """
-            for existing_file, existing_line in posted_locations:
-                if existing_file == file_path:
-                    if abs(existing_line - line) <= range_threshold:
-                        return True
+            for entry in posted_locations:
+                try:
+                    # Handle dictionary entries
+                    if isinstance(entry, dict):
+                        existing_file = entry.get("file") or entry.get("path")
+                        existing_line = entry.get("line")
+                        if not existing_file or not existing_line:
+                            continue
+                    # Handle tuple/list entries with 2+ values
+                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                        existing_file = entry[0]
+                        existing_line = entry[1]
+                    else:
+                        # Skip malformed entries
+                        continue
+
+                    # Check if near existing comment
+                    if existing_file == file_path:
+                        if abs(existing_line - line) <= range_threshold:
+                            return True
+                except (TypeError, ValueError, IndexError, AttributeError):
+                    # Skip malformed entries safely
+                    continue
             return False
 
         def post_batch_comments(issues):
@@ -457,7 +507,9 @@ def handle_pull_request(payload: dict):
 
                 # Check for nearby existing comments (within ±3 lines)
                 if is_near_existing_comment(file_path, line):
-                    logger.info(f"Skipping location near existing comment: {file_path}:{line}")
+                    logger.info(
+                        f"Skipping location near existing comment: {file_path}:{line}"
+                    )
                     continue
 
                 # This is a new location, add it
@@ -469,7 +521,9 @@ def handle_pull_request(payload: dict):
                 return
 
             all_issues.extend(new_issues)
-            logger.info(f"Posting {len(new_issues)} new comments from batch (total posted: {len(all_issues)})...")
+            logger.info(
+                f"Posting {len(new_issues)} new comments from batch (total posted: {len(all_issues)})..."
+            )
             comment_poster.post_review_comments(
                 repo_owner,
                 repo_name,
@@ -496,13 +550,15 @@ def handle_pull_request(payload: dict):
         if remaining_issues:
             all_issues.extend(remaining_issues)
 
-        logger.info(f"Review complete. Found {len(all_issues)} total accessibility issues")
+        logger.info(
+            f"Review complete. Found {len(all_issues)} total accessibility issues"
+        )
 
         # Generate SARIF output if requested
         if os.getenv("OUTPUT_SARIF", "").lower() in ["1", "true", "yes"]:
             sarif_path = os.getenv("SARIF_OUTPUT_PATH", "accessibility-report.sarif")
             repo_uri = f"https://github.com/{repo_owner}/{repo_name}"
-            
+
             logger.info(f"Generating SARIF report to {sarif_path}...")
             sarif_success = generate_and_write_sarif(
                 all_issues,
@@ -510,7 +566,7 @@ def handle_pull_request(payload: dict):
                 repo_uri=repo_uri,
                 repo_ref=head_sha,
             )
-            
+
             if sarif_success:
                 logger.info(f"✅ SARIF report generated: {sarif_path}")
             else:
@@ -548,10 +604,15 @@ def handle_pull_request(payload: dict):
 
         logger.info("✅ Review complete")
 
-        return jsonify({
-            "message": "Review complete",
-            "issues_found": len(all_issues),
-        }), 200
+        return (
+            jsonify(
+                {
+                    "message": "Review complete",
+                    "issues_found": len(all_issues),
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         logger.error(f"Error processing PR: {e}", exc_info=True)
