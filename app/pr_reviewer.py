@@ -22,6 +22,7 @@ from app.diff_parser import (
     DiffParser,
     validate_issues_in_batch,
     is_no_issues_placeholder,
+    _is_web_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -233,13 +234,11 @@ class PRReviewer:
             if debug_web_review:
                 web_normalized = sum(
                     1 for issue in normalized_issues
-                    if issue.get('file', '').startswith('web/') or
-                    any(issue.get('file', '').endswith(ext) for ext in web_extensions)
+                    if _is_web_file(issue.get('file', ''))
                 )
                 web_validated = sum(
                     1 for issue in validated_issues
-                    if issue.get('file', '').startswith('web/') or
-                    any(issue.get('file', '').endswith(ext) for ext in web_extensions)
+                    if _is_web_file(issue.get('file', ''))
                 )
                 non_web_normalized = len(normalized_issues) - web_normalized
                 non_web_validated = len(validated_issues) - web_validated

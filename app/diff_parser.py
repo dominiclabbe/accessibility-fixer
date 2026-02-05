@@ -12,6 +12,8 @@ from difflib import get_close_matches
 from typing import Dict, List, Tuple, Optional, Set
 from pathlib import Path
 
+from app.constants import WEB_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -300,7 +302,6 @@ def _is_web_file(file_path: str) -> bool:
     Returns:
         True if file is a web file (.tsx/.ts/.jsx/.js/.css/.html or in web/ dir)
     """
-    from app.constants import WEB_EXTENSIONS
     return file_path.startswith("web/") or Path(file_path).suffix in WEB_EXTENSIONS
 
 
