@@ -7,9 +7,12 @@ Handles per-file diff filtering and commentable line extraction.
 
 import os
 import re
+import logging
 from difflib import get_close_matches
 from typing import Dict, List, Tuple, Optional, Set
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class DiffParser:
@@ -287,6 +290,20 @@ def _find_closest_files(file_path: str, batch_files: List[str], n: int = 2) -> L
     return [batch_basenames[match] for match in close_matches if batch_basenames[match] != file_path]
 
 
+def _is_web_file(file_path: str) -> bool:
+    """
+    Check if a file is a web file (for DEBUG_WEB_REVIEW filtering).
+    
+    Args:
+        file_path: File path to check
+        
+    Returns:
+        True if file is a web file (.tsx/.ts/.jsx/.js/.css/.html or in web/ dir)
+    """
+    from app.constants import WEB_EXTENSIONS
+    return file_path.startswith("web/") or Path(file_path).suffix in WEB_EXTENSIONS
+
+
 def validate_issues_in_batch(
     issues: List[Dict],
     batch_files: List[str],
@@ -329,39 +346,70 @@ def validate_issues_in_batch(
         
         # DEBUG_WEB_REVIEW: Log right_line_to_text counts
         if debug_web_review:
-            print("[DEBUG_WEB_REVIEW] right_line_to_text mapping:")
+            logger.info("[DEBUG_WEB_REVIEW] right_line_to_text mapping:")
             for file_path, line_to_text in line_texts.items():
-                print(f"  {file_path}: {len(line_to_text)} commentable lines with text")
+                logger.info(f"  {file_path}: {len(line_to_text)} commentable lines with text")
 
     for issue in issues:
         file_path = issue.get('file', '')
         line = issue.get('line', 0)
+        is_web = _is_web_file(file_path)
 
         # Skip if file not in batch
         if file_path not in batch_file_set:
-            drop_reason = f"file not in batch (proposed: {file_path}, batch has {len(batch_files)} files)"
+            reason_code = "file_not_in_batch"
+            drop_reason = f"{reason_code}: proposed={file_path}, batch_size={len(batch_files)}"
+            
+            # Always log warning for dropped issues (not gated by DEBUG_WEB_REVIEW)
             print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
-            if debug_web_review:
+            
+            # DEBUG_WEB_REVIEW: Add detailed logging for web files
+            if debug_web_review and is_web:
                 # Find closest matches based on filename similarity
                 closest_files = _find_closest_files(file_path, batch_files, n=3)
+                
+                # Check for basename matches in batch
+                file_basename = os.path.basename(file_path)
+                basename_matches = [f for f in batch_files if os.path.basename(f) == file_basename]
                 
                 drop_reasons.append({
                     "file": file_path,
                     "line": line,
+                    "reason_code": reason_code,
                     "reason": drop_reason,
                     "title": issue.get("title", "")[:60],
-                    "closest_files": closest_files if closest_files else ["(no close matches)"]
+                    "closest_files": closest_files if closest_files else [],
+                    "basename_matches": basename_matches if basename_matches else []
                 })
             continue
 
         # Skip if line is invalid
         if line <= 0:
-            drop_reason = "invalid line number"
+            reason_code = "invalid_line_number"
+            drop_reason = f"{reason_code}: line={line}"
             print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
-            if debug_web_review:
+            
+            if debug_web_review and is_web:
                 drop_reasons.append({
                     "file": file_path,
                     "line": line,
+                    "reason_code": reason_code,
+                    "reason": drop_reason,
+                    "title": issue.get("title", "")[:60]
+                })
+            continue
+
+        # Check if file has no commentable lines at all
+        if file_path not in commentable_lines or not commentable_lines[file_path]:
+            reason_code = "no_commentable_lines_for_file"
+            drop_reason = f"{reason_code}: file={file_path}"
+            print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
+            
+            if debug_web_review and is_web:
+                drop_reasons.append({
+                    "file": file_path,
+                    "line": line,
+                    "reason_code": reason_code,
                     "reason": drop_reason,
                     "title": issue.get("title", "")[:60]
                 })
@@ -411,6 +459,9 @@ def validate_issues_in_batch(
                     # Store matched text for fingerprinting
                     issue['_anchor_matched_text'] = matched_text
                 else:
+                    # Determine specific drop reason
+                    anchor_attempted = bool(diff_text and file_path in line_texts)
+                    
                     # Fall back to nearest commentable line
                     nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
                     if nearest:
@@ -419,21 +470,35 @@ def validate_issues_in_batch(
                         else:
                             print(f"  ⚠️  Adjusted {file_path}:{line} -> {nearest} (nearest commentable, no anchor found)")
                         issue['line'] = nearest
-                    else:
-                        drop_reason = "no commentable line nearby"
-                        if debug_enabled:
-                            print(f"  [RESULT] Dropping issue - {drop_reason}\n")
-                        print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
-                        if debug_web_review:
-                            # Find closest files for suggestion
-                            closest_files = _find_closest_files(file_path, batch_files, n=2)
-                            
+                        
+                        # DEBUG_WEB_REVIEW: Track anchor resolution failure for web files
+                        if debug_web_review and is_web and anchor_attempted:
+                            reason_code = "anchor_not_found"
                             drop_reasons.append({
                                 "file": file_path,
                                 "line": line,
+                                "adjusted_to": nearest,
+                                "reason_code": reason_code,
+                                "reason": f"{reason_code}: fell back to nearest commentable line {nearest}",
+                                "title": issue.get("title", "")[:60],
+                            })
+                    else:
+                        # No nearest commentable line found - must drop
+                        reason_code = "nearest_commentable_none" if anchor_attempted else "line_not_commentable"
+                        drop_reason = f"{reason_code}: proposed_line={line}, commentable_range={min(file_commentable) if file_commentable else 'N/A'}-{max(file_commentable) if file_commentable else 'N/A'}"
+                        
+                        if debug_enabled:
+                            print(f"  [RESULT] Dropping issue - {drop_reason}\n")
+                        print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
+                        
+                        if debug_web_review and is_web:
+                            drop_reasons.append({
+                                "file": file_path,
+                                "line": line,
+                                "reason_code": reason_code,
                                 "reason": drop_reason,
                                 "title": issue.get("title", "")[:60],
-                                "closest_files": closest_files if closest_files else []
+                                "commentable_lines_count": len(file_commentable) if file_commentable else 0,
                             })
                         continue
             else:
@@ -449,12 +514,21 @@ def validate_issues_in_batch(
 
     # DEBUG_WEB_REVIEW: Log drop reasons summary
     if debug_web_review and drop_reasons:
-        print("\n[DEBUG_WEB_REVIEW] Validation drop reasons:")
+        logger.info("\n[DEBUG_WEB_REVIEW] Validation drop reasons (web files only):")
         for drop in drop_reasons:
-            print(f"  {drop['file']}:{drop['line']} - {drop['reason']}")
-            print(f"    Title: {drop['title']}")
+            reason_code = drop.get('reason_code', 'unknown')
+            logger.info(f"  {drop['file']}:{drop['line']} - {reason_code}")
+            logger.info(f"    Title: {drop['title']}")
+            logger.info(f"    Reason: {drop['reason']}")
+            
+            if drop.get('adjusted_to'):
+                logger.info(f"    Adjusted to line: {drop['adjusted_to']}")
+            if drop.get('basename_matches'):
+                logger.info(f"    Basename matches in batch: {drop['basename_matches']}")
             if drop.get('closest_files'):
-                print(f"    Closest batch files: {drop['closest_files']}")
+                logger.info(f"    Closest files (difflib): {drop['closest_files']}")
+            if 'commentable_lines_count' in drop:
+                logger.info(f"    Commentable lines in file: {drop['commentable_lines_count']}")
 
     return validated
 
