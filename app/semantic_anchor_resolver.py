@@ -133,13 +133,12 @@ class SemanticAnchorResolver:
         # - SwiftUI: TextField(, Toggle(, Button(, etc.
         # - UIKit: UIButton, UITextField, etc.
         # - Web: <button, <input, etc.
-        # Match capitalized identifier followed by '(' or '<' followed by identifier
         patterns = [
-            # Function/constructor calls - relaxed pattern to match common UI elements
-            # Matches: TextField(, OutlinedTextField(, Button(, Toggle(, etc.
-            r'\b([A-Z][a-zA-Z0-9]*(?:Field|Button|Toggle|Slider|Switch|Text|Icon|View|Label|Image|Input|Select|TextArea)?)\s*\(',
-            # XML/HTML tags (e.g., <TextField, <Button)
-            r'<([A-Z][a-zA-Z0-9]*(?:Field|Button|Toggle|Slider|Switch|Text|Icon|View|Label|Image|Input|Select|TextArea)?)\b',
+            # Function/constructor calls - match any capitalized identifier followed by '('
+            # This catches UI components, custom components, and future components
+            r'\b([A-Z][a-zA-Z0-9]+)\s*\(',
+            # XML/HTML tags - match any capitalized tag
+            r'<([A-Z][a-zA-Z0-9]+)\b',
             # UIKit classes (e.g., UIButton, UITextField)
             r'\b(UI[A-Z][a-zA-Z0-9]*)\b',
         ]
