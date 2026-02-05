@@ -5,6 +5,43 @@ Validates posted_locations unpacking in is_near_existing_comment.
 """
 
 
+def _create_is_near_existing_comment_function(posted_locations):
+    """
+    Helper function to create an is_near_existing_comment function with the given posted_locations.
+    This matches the implementation in app/webhook_server.py.
+    """
+
+    def is_near_existing_comment(
+        file_path: str, line: int, range_threshold: int = 5
+    ) -> bool:
+        for entry in posted_locations:
+            try:
+                # Handle dictionary entries
+                if isinstance(entry, dict):
+                    existing_file = entry.get("file") or entry.get("path")
+                    existing_line = entry.get("line")
+                    if not existing_file or not existing_line:
+                        continue
+                # Handle tuple/list entries with 2+ values
+                elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
+                    existing_file = entry[0]
+                    existing_line = entry[1]
+                else:
+                    # Skip malformed entries
+                    continue
+
+                # Check if near existing comment
+                if existing_file == file_path:
+                    if abs(existing_line - line) <= range_threshold:
+                        return True
+            except (TypeError, ValueError, IndexError, AttributeError):
+                # Skip malformed entries safely
+                continue
+        return False
+
+    return is_near_existing_comment
+
+
 class TestIsNearExistingComment:
     """Tests for is_near_existing_comment function."""
 
@@ -15,34 +52,9 @@ class TestIsNearExistingComment:
             ("app/utils.py", 25),
         }
 
-        # Create a mock function to test
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    # Handle dictionary entries
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    # Handle tuple/list entries with 2+ values
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        # Skip malformed entries
-                        continue
-
-                    # Check if near existing comment
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    # Skip malformed entries safely
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Test exact match
         assert is_near_existing_comment("app/main.py", 10) is True
@@ -60,28 +72,9 @@ class TestIsNearExistingComment:
             ("app/utils.py", 25, "No ARIA label"),
         }
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Test exact match
         assert is_near_existing_comment("app/main.py", 10) is True
@@ -96,130 +89,50 @@ class TestIsNearExistingComment:
             ("app/main.py", 10, "Missing alt text", "extra_data"),
         }
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         assert is_near_existing_comment("app/main.py", 10) is True
 
     def test_with_dict_file_key(self):
         """Test that dictionaries with 'file' key work."""
-        posted_locations = {
-            frozenset({"file": "app/main.py", "line": 10}.items()),
-        }
+        # Use a list since dicts can't be in a set
+        posted_locations = [
+            {"file": "app/main.py", "line": 10},
+        ]
 
-        # Convert frozenset back to dict for testing
-        posted_locations_dicts = [dict(entry) for entry in posted_locations]
-
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations_dicts:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         assert is_near_existing_comment("app/main.py", 10) is True
 
     def test_with_dict_path_key(self):
         """Test that dictionaries with 'path' key work."""
-        posted_locations_dicts = [
+        posted_locations = [
             {"path": "app/main.py", "line": 10},
         ]
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations_dicts:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         assert is_near_existing_comment("app/main.py", 10) is True
 
     def test_with_mixed_formats(self):
         """Test that mixed formats work together."""
-        # Mix of 2-tuples, 3-tuples, and lists
-        posted_locations = {
+        # Mix of 2-tuples, 3-tuples, and lists in a list (not a set due to dicts)
+        posted_locations = [
             ("app/main.py", 10),
             ("app/utils.py", 25, "No ARIA label"),
             ("app/helpers.py", 50, "Missing alt", "extra"),
-        }
+            ["app/models.py", 15],
+        ]
 
-        # Also test with lists
-        posted_locations.add(tuple(["app/models.py", 15]))
-
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Test all formats
         assert is_near_existing_comment("app/main.py", 10) is True
@@ -230,37 +143,18 @@ class TestIsNearExistingComment:
     def test_with_malformed_entries(self):
         """Test that malformed entries are skipped safely."""
         # Include various malformed entries
-        posted_locations = {
+        posted_locations = [
             ("app/main.py", 10),  # Valid
             ("single_value",),  # Malformed: only 1 value
             (),  # Malformed: empty tuple
             "not_a_tuple",  # Malformed: string
             123,  # Malformed: number
             None,  # Malformed: None
-        }
+        ]
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Should still find valid entry and not crash on malformed ones
         assert is_near_existing_comment("app/main.py", 10) is True
@@ -272,28 +166,9 @@ class TestIsNearExistingComment:
             ("app/main.py", 10, "issue"),
         }
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Test default range (±5)
         assert is_near_existing_comment("app/main.py", 5) is True  # -5
@@ -319,63 +194,25 @@ class TestIsNearExistingComment:
         """Test with empty posted_locations set."""
         posted_locations = set()
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Should return False for any query
         assert is_near_existing_comment("app/main.py", 10) is False
 
     def test_dict_with_missing_keys(self):
         """Test that dicts with missing keys are skipped."""
-        posted_locations_dicts = [
+        posted_locations = [
             {"path": "app/main.py", "line": 10},  # Valid
             {"file": "app/utils.py"},  # Missing line
             {"line": 25},  # Missing file/path
             {},  # Empty dict
         ]
 
-        def is_near_existing_comment(
-            file_path: str, line: int, range_threshold: int = 5
-        ) -> bool:
-            for entry in posted_locations_dicts:
-                try:
-                    if isinstance(entry, dict):
-                        existing_file = entry.get("file") or entry.get("path")
-                        existing_line = entry.get("line")
-                        if not existing_file or not existing_line:
-                            continue
-                    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
-                        existing_file = entry[0]
-                        existing_line = entry[1]
-                    else:
-                        continue
-
-                    if existing_file == file_path:
-                        if abs(existing_line - line) <= range_threshold:
-                            return True
-                except (TypeError, ValueError, IndexError, AttributeError):
-                    continue
-            return False
+        is_near_existing_comment = _create_is_near_existing_comment_function(
+            posted_locations
+        )
 
         # Should find the valid dict entry
         assert is_near_existing_comment("app/main.py", 10) is True
