@@ -13,6 +13,7 @@ Supports:
 - Web (React/JSX/TSX/HTML/CSS)
 """
 
+import os
 import re
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -108,6 +109,51 @@ class SemanticAnchorResolver:
         'hint': [r'accessibilityHint', r'android:hint', r'aria-describedby'],
         'contentdescription': [r'android:contentDescription', r'contentDescription\s*='],
     }
+
+    @staticmethod
+    def extract_call_site_token(current_code: Optional[str]) -> Optional[str]:
+        """
+        Extract primary UI call-site token from current_code snippet.
+        
+        This extracts the main UI element invocation pattern (e.g., 'OutlinedTextField(',
+        'TextField(', 'Button(', 'Toggle(', etc.) from the code snippet to prioritize
+        anchoring to the actual call-site line rather than modifier/style lines.
+        
+        Args:
+            current_code: Code snippet from issue (may be None or empty)
+            
+        Returns:
+            Call-site token (e.g., 'OutlinedTextField(') or None if not found
+        """
+        if not current_code:
+            return None
+            
+        # Pattern to match UI element call-sites:
+        # - Compose/Kotlin: OutlinedTextField(, Button(, TextField(, etc.
+        # - SwiftUI: TextField(, Toggle(, Button(, etc.
+        # - UIKit: UIButton, UITextField, etc.
+        # - Web: <button, <input, etc.
+        patterns = [
+            # Function/constructor calls - match any capitalized identifier followed by '('
+            # This catches UI components, custom components, and future components
+            r'\b([A-Z][a-zA-Z0-9]+)\s*\(',
+            # XML/HTML tags - match any capitalized tag
+            r'<([A-Z][a-zA-Z0-9]+)\b',
+            # UIKit classes (e.g., UIButton, UITextField)
+            r'\b(UI[A-Z][a-zA-Z0-9]*)\b',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, current_code)
+            if match:
+                token = match.group(1)
+                # Return with appropriate suffix
+                if '<' in pattern:
+                    return f'<{token}'
+                else:
+                    return f'{token}('
+        
+        return None
 
     @staticmethod
     def extract_commentable_line_texts(
@@ -238,15 +284,20 @@ class SemanticAnchorResolver:
         Resolve issue anchor to exact line using diff-grounded algorithm.
 
         This is the primary deterministic anchoring function that implements:
-        a) If issue.anchor_text exists: search for it in right_line_to_text
-        b) If missing: infer candidates from issue metadata and file extension
-        c) If still no match: return None (caller should use fallback)
+        a) Extract call-site token from issue.current_code (highest priority)
+        b) If issue.anchor_text exists: add it to candidates (high priority)
+        c) If missing: infer candidates from issue metadata and file extension (lower priority)
+        d) Prioritize call-site matches over other matches
+        e) If still no match: return None (caller should use fallback)
 
-        When multiple matches found, chooses closest to issue.line if provided,
-        otherwise closest to fallback_line, or first match in line-number order.
+        When multiple matches found, chooses:
+        1. Call-site match (from current_code) over other matches
+        2. Explicit anchor match over inferred matches
+        3. Closest to issue.line if provided, otherwise closest to fallback_line
+        4. First match in line-number order
 
         Args:
-            issue: Issue dict with 'line', 'title', 'description', optionally 'anchor_text'
+            issue: Issue dict with 'line', 'title', 'description', optionally 'anchor_text', 'current_code'
             right_line_to_text: Dict mapping commentable RIGHT-side line numbers to their text
             fallback_line: Optional fallback line number for tie-breaking
             file_extension: Optional file extension for framework inference
@@ -260,33 +311,71 @@ class SemanticAnchorResolver:
                 print("  [anchor] No line texts available")
             return None, None
 
-        # Step 1: Get anchor text from issue or infer candidates
+        # Step 1: Extract call-site token from current_code (highest priority)
+        call_site_token = SemanticAnchorResolver.extract_call_site_token(
+            issue.get('current_code')
+        )
+        
+        # Step 2: Get explicit anchor text from issue
         explicit_anchor = issue.get('anchor_text') or issue.get('anchor')
         
+        # Step 3: Build prioritized candidate list
+        # Priority levels: 0 = call-site, 1 = explicit anchor, 2 = inferred
+        # Special case: if explicit anchor is provided WITHOUT current_code, don't use inferred candidates
+        # (user explicitly specified where to anchor, so don't guess)
+        use_inferred = True
+        if explicit_anchor and not call_site_token:
+            # Only explicit anchor, no call-site - don't fall back to inferred
+            use_inferred = False
+        
+        anchor_candidates = []
+        candidate_priorities = []
+        
+        # Highest priority: call-site token from current_code
+        if call_site_token:
+            anchor_candidates.append(call_site_token)
+            candidate_priorities.append(0)
+            if debug:
+                print(f"  [anchor] Extracted call-site token from current_code: {call_site_token}")
+        
+        # Next priority: explicit anchor_text
         if explicit_anchor:
-            # Use explicit anchor_text
-            anchor_candidates = [str(explicit_anchor)]
+            anchor_candidates.append(str(explicit_anchor))
+            candidate_priorities.append(1)
             if debug:
                 print(f"  [anchor] Using explicit anchor_text: {explicit_anchor}")
+        
+        # Lower priority: infer from issue metadata (only if allowed)
+        if use_inferred:
+            inferred = SemanticAnchorResolver.extract_anchor_candidates(issue, file_extension)
+            for cand in inferred:
+                anchor_candidates.append(cand)
+                candidate_priorities.append(2)
         else:
-            # Infer candidates from issue metadata
-            anchor_candidates = SemanticAnchorResolver.extract_anchor_candidates(issue, file_extension)
-            if debug:
-                print(f"  [anchor] Inferred {len(anchor_candidates)} candidates from issue metadata")
+            inferred = []
+        
+        if debug:
+            print(f"  [anchor] Total {len(anchor_candidates)} candidates (call-site: {1 if call_site_token else 0}, explicit: {1 if explicit_anchor else 0}, inferred: {len(inferred)})")
+            if len(anchor_candidates) <= 10:
+                print(f"  [anchor] Candidates: {anchor_candidates}")
+            else:
+                print(f"  [anchor] Candidates (first 10): {anchor_candidates[:10]}")
 
         if not anchor_candidates:
             if debug:
                 print("  [anchor] No anchor candidates found")
             return None, None
 
-        # Step 2: Search for candidates in right_line_to_text
-        matches = []  # List of (line_num, matched_text, candidate_pattern)
+        # Step 4: Search for candidates in right_line_to_text
+        matches = []  # List of (line_num, matched_text, candidate_pattern, priority)
         
         for line_num, line_text in right_line_to_text.items():
             if not line_text:
                 continue
             
-            for candidate in anchor_candidates:
+            for idx, candidate in enumerate(anchor_candidates):
+                priority = candidate_priorities[idx]
+                
                 # Check if candidate is a regex pattern
                 is_regex_pattern = any(char in candidate for char in [r'\b', r'\s', r'\(', r'[', r'^', r'$', r'.', r'*'])
                 
@@ -294,20 +383,20 @@ class SemanticAnchorResolver:
                     if is_regex_pattern:
                         # Use as regex pattern
                         if re.search(candidate, line_text):
-                            matches.append((line_num, line_text.strip(), candidate))
+                            matches.append((line_num, line_text.strip(), candidate, priority))
                             break
                         # Try case-insensitive for keyword patterns
                         elif re.search(candidate, line_text, re.IGNORECASE):
-                            matches.append((line_num, line_text.strip(), candidate))
+                            matches.append((line_num, line_text.strip(), candidate, priority))
                             break
                     else:
                         # Try exact substring match (case-sensitive)
                         if candidate in line_text:
-                            matches.append((line_num, line_text.strip(), candidate))
+                            matches.append((line_num, line_text.strip(), candidate, priority))
                             break
                         # Try case-insensitive substring match
                         elif candidate.lower() in line_text.lower():
-                            matches.append((line_num, line_text.strip(), candidate))
+                            matches.append((line_num, line_text.strip(), candidate, priority))
                             break
                 except re.error:
                     # Invalid regex, skip
@@ -319,34 +408,52 @@ class SemanticAnchorResolver:
             return None, None
 
         if debug:
-            print(f"  [anchor] Found {len(matches)} matches")
+            print(f"  [anchor] Found {len(matches)} matches:")
+            for line, text, cand, prio in matches[:5]:  # Show first 5
+                prio_label = ["[CALL-SITE]", "[EXPLICIT]", "[INFERRED]"][prio]
+                print(f"    Line {line}: {text[:60]} {prio_label}")
 
-        # Step 3: Choose best match based on proximity
+        # Step 5: Choose best match based on priority and proximity
         if len(matches) == 1:
-            resolved_line, matched_text, _ = matches[0]
+            resolved_line, matched_text, _, priority = matches[0]
+            rationale = ["call-site", "explicit anchor", "inferred"][priority]
             if debug:
-                print(f"  [anchor] Single match at line {resolved_line}: {matched_text[:60]}")
+                print(f"  [anchor] Resolved to line {resolved_line} ({rationale} match): {matched_text[:60]}")
             return resolved_line, matched_text
 
-        # Multiple matches - choose closest to proposed line or fallback
+        # Multiple matches - prioritize by priority level first
+        min_priority = min(m[3] for m in matches)
+        priority_matches = [m for m in matches if m[3] == min_priority]
+        
+        if debug and len(priority_matches) < len(matches):
+            prio_label = ["call-site", "explicit anchor", "inferred"][min_priority]
+            print(f"  [anchor] Prioritizing {len(priority_matches)} {prio_label} matches over {len(matches) - len(priority_matches)} lower-priority matches")
+        
+        matches = priority_matches
+        
+        # Now choose closest to proposed line or fallback
         reference_line = issue.get('line', 0) or fallback_line or 0
         
         if reference_line > 0:
             # Sort by distance from reference line
             matches_with_distance = [
-                (line, text, abs(line - reference_line), pattern)
-                for line, text, pattern in matches
+                (line, text, abs(line - reference_line), pattern, prio)
+                for line, text, pattern, prio in matches
             ]
             matches_with_distance.sort(key=lambda x: x[2])  # Sort by distance
-            resolved_line, matched_text, _, _ = matches_with_distance[0]
+            resolved_line, matched_text, distance, _, prio = matches_with_distance[0]
+            rationale = ["call-site", "explicit anchor", "inferred"][prio]
+            rationale += f", closest to {reference_line}"
             if debug:
-                print(f"  [anchor] Multiple matches, chose line {resolved_line} (closest to {reference_line}): {matched_text[:60]}")
+                print(f"  [anchor] Multiple matches, chose line {resolved_line} ({rationale}): {matched_text[:60]}")
         else:
             # No reference line, choose first match in line order
             matches.sort(key=lambda x: x[0])  # Sort by line number
-            resolved_line, matched_text, _ = matches[0]
+            resolved_line, matched_text, _, prio = matches[0]
+            rationale = ["call-site", "explicit anchor", "inferred"][prio]
+            rationale += ", first in line order"
             if debug:
-                print(f"  [anchor] Multiple matches, chose first at line {resolved_line}: {matched_text[:60]}")
+                print(f"  [anchor] Multiple matches, chose first at line {resolved_line} ({rationale}): {matched_text[:60]}")
 
         return resolved_line, matched_text
 
