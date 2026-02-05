@@ -515,5 +515,276 @@ class TestSemanticAnchorResolver:
         assert any('accessibilityLabel' in p for p in patterns)
 
 
+class TestResolveAnchorLine:
+    """Tests for the new deterministic resolve_anchor_line function."""
+
+    def test_resolve_with_explicit_anchor_text_compose(self):
+        """Test resolving with explicit anchor_text field - Compose Slider."""
+        commentable_lines = DiffParser.extract_commentable_lines(COMPOSE_SLIDER_DIFF)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            COMPOSE_SLIDER_DIFF, commentable_lines
+        )
+
+        file_path = "app/src/main/java/com/example/Settings.kt"
+        right_line_to_text = line_texts[file_path]
+
+        # Issue with explicit anchor_text
+        issue = {
+            'file': file_path,
+            'line': 13,  # Model might say line 13 (Text line)
+            'title': 'Slider missing accessibility label',
+            'anchor_text': 'Slider(',  # Explicit anchor
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=13,
+            file_extension='.kt',
+            debug=False
+        )
+
+        # Should resolve to Slider( line
+        assert resolved_line is not None
+        assert 'Slider(' in matched_text
+
+    def test_resolve_with_inferred_anchor_swiftui_toggle(self):
+        """Test resolving with inferred anchor - SwiftUI Toggle."""
+        commentable_lines = DiffParser.extract_commentable_lines(SWIFTUI_TOGGLE_DIFF)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            SWIFTUI_TOGGLE_DIFF, commentable_lines
+        )
+
+        file_path = "SettingsView.swift"
+        right_line_to_text = line_texts[file_path]
+
+        # Issue without explicit anchor_text (should infer from title)
+        # Use line 11 as proposed line (close to actual Toggle at line 11)
+        issue = {
+            'file': file_path,
+            'line': 11,  # Close to actual Toggle line
+            'title': 'Toggle missing accessibility hint',
+            'description': 'Toggle control needs accessibility hint',
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=11,
+            file_extension='.swift',
+            debug=False
+        )
+
+        # Should resolve to Toggle( line
+        assert resolved_line is not None
+        assert 'Toggle(' in matched_text
+
+    def test_resolve_android_xml_content_description(self):
+        """Test resolving Android XML contentDescription issue."""
+        commentable_lines = DiffParser.extract_commentable_lines(ANDROID_XML_SEEKBAR_DIFF)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            ANDROID_XML_SEEKBAR_DIFF, commentable_lines
+        )
+
+        file_path = "app/src/main/res/layout/activity_settings.xml"
+        right_line_to_text = line_texts[file_path]
+
+        issue = {
+            'file': file_path,
+            'line': 8,  # Might be on TextView
+            'title': 'SeekBar has null contentDescription',
+            'description': 'SeekBar should have descriptive contentDescription',
+            'anchor_text': 'contentDescription',  # Explicit anchor
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=8,
+            file_extension='.xml',
+            debug=False
+        )
+
+        # Should resolve to contentDescription line or SeekBar line
+        assert resolved_line is not None
+        assert 'contentDescription' in matched_text or 'SeekBar' in matched_text
+
+    def test_resolve_web_input_range(self):
+        """Test resolving Web input type=range issue."""
+        web_diff = """diff --git a/src/components/Slider.tsx b/src/components/Slider.tsx
+index 1111111..2222222 100644
+--- a/src/components/Slider.tsx
++++ b/src/components/Slider.tsx
+@@ -5,6 +5,10 @@ export const VolumeSlider: React.FC = () => {
+   return (
+     <div>
+       <label htmlFor="volume">Volume</label>
++      <input
++        id="volume"
++        type="range"
++        min="0" max="100" />
+     </div>
+   );
+ };
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(web_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            web_diff, commentable_lines
+        )
+
+        file_path = "src/components/Slider.tsx"
+        right_line_to_text = line_texts[file_path]
+
+        issue = {
+            'file': file_path,
+            'line': 8,  # Might be on label line
+            'title': 'Input range missing aria-label',
+            'description': 'Range input should have aria-label',
+            'anchor_text': 'type="range"',
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=8,
+            file_extension='.tsx',
+            debug=False
+        )
+
+        # Should resolve to input with type="range"
+        assert resolved_line is not None
+        assert 'type="range"' in matched_text or '<input' in matched_text
+
+    def test_resolve_multiple_matches_chooses_closest(self):
+        """Test that when multiple matches exist, closest to proposed line is chosen."""
+        # Diff with multiple Button calls
+        multi_button_diff = """diff --git a/ButtonScreen.kt b/ButtonScreen.kt
+index aaaaaaa..bbbbbbb 100644
+--- a/ButtonScreen.kt
++++ b/ButtonScreen.kt
+@@ -10,10 +10,18 @@ fun ButtonScreen() {
+     Column {
++        Button(onClick = {}) {
++            Text("First")
++        }
++        
++        Spacer(modifier = Modifier.height(16.dp))
++        
++        Button(onClick = {}) {
++            Text("Second")
++        }
+     }
+ }
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(multi_button_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            multi_button_diff, commentable_lines
+        )
+
+        file_path = "ButtonScreen.kt"
+        right_line_to_text = line_texts[file_path]
+
+        # Issue closer to second Button
+        issue = {
+            'file': file_path,
+            'line': 18,  # Closer to second Button
+            'title': 'Button missing content description',
+            'anchor_text': 'Button(',
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=18,
+            file_extension='.kt',
+            debug=False
+        )
+
+        # Should resolve to a Button line, preferring the one closer to line 18
+        assert resolved_line is not None
+        assert 'Button(' in matched_text
+        # The second Button should be closer to line 18
+        assert resolved_line >= 16  # Should be second Button, not first
+
+    def test_resolve_no_match_returns_none(self):
+        """Test that resolver returns None when no anchor match found."""
+        commentable_lines = DiffParser.extract_commentable_lines(COMPOSE_SLIDER_DIFF)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            COMPOSE_SLIDER_DIFF, commentable_lines
+        )
+
+        file_path = "app/src/main/java/com/example/Settings.kt"
+        right_line_to_text = line_texts[file_path]
+
+        # Issue with anchor that doesn't exist
+        issue = {
+            'file': file_path,
+            'line': 13,
+            'title': 'Generic issue',
+            'anchor_text': 'NonExistentElement(',
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=13,
+            file_extension='.kt',
+            debug=False
+        )
+
+        # Should return None when no match found
+        assert resolved_line is None
+        assert matched_text is None
+
+    def test_resolve_case_insensitive_matching(self):
+        """Test that anchor matching works case-insensitively for keywords."""
+        commentable_lines = DiffParser.extract_commentable_lines(COMPOSE_SLIDER_DIFF)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            COMPOSE_SLIDER_DIFF, commentable_lines
+        )
+
+        file_path = "app/src/main/java/com/example/Settings.kt"
+        right_line_to_text = line_texts[file_path]
+
+        # Issue with lowercase anchor (should still match Slider with capital S)
+        issue = {
+            'file': file_path,
+            'line': 13,
+            'title': 'Slider accessibility issue',
+            'anchor_text': 'slider',  # lowercase
+        }
+
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=13,
+            file_extension='.kt',
+            debug=False
+        )
+
+        # Should match case-insensitively
+        assert resolved_line is not None
+        assert 'Slider' in matched_text
+
+    def test_extract_anchor_candidates_with_file_extension(self):
+        """Test that file extension influences anchor candidate extraction."""
+        issue = {
+            'title': 'Interactive element needs label',
+            'description': 'Add accessibility support',
+        }
+
+        # Kotlin extension should add Compose patterns
+        candidates_kt = SemanticAnchorResolver.extract_anchor_candidates(issue, '.kt')
+        assert any(r'\bSlider\s*\(' in str(c) for c in candidates_kt)
+
+        # Swift extension should add SwiftUI patterns
+        candidates_swift = SemanticAnchorResolver.extract_anchor_candidates(issue, '.swift')
+        assert any('accessibilityLabel' in str(c) for c in candidates_swift)
+
+        # XML extension should add Android XML patterns
+        candidates_xml = SemanticAnchorResolver.extract_anchor_candidates(issue, '.xml')
+        assert any('contentDescription' in str(c) for c in candidates_xml)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -160,7 +160,7 @@ class CommentPoster:
             )
             print(f"Found {len(existing_locations)} existing comment locations")
 
-        # Build review comments with deduplication
+        # Build review comments with enhanced deduplication
         comments = []
         seen_locations = set()
 
@@ -168,10 +168,23 @@ class CommentPoster:
             comment = self._format_inline_comment(issue)
             if comment:
                 location_key = (comment['path'], comment['line'])
+                
+                # Extract title from issue for matching
+                issue_title = issue.get('title', '')[:50].strip()
 
-                # Skip if comment already exists from previous review
-                if location_key in existing_locations:
-                    print(f"Skipping existing comment at {comment['path']}:{comment['line']}")
+                # Check if similar comment already exists
+                # Match by location AND title to handle anchor-based duplicates
+                is_duplicate = False
+                for existing_path, existing_line, existing_title in existing_locations:
+                    if existing_path == comment['path']:
+                        # Check if line numbers are close (within 5 lines) and titles match
+                        line_distance = abs(existing_line - comment['line'])
+                        if line_distance <= 5 and existing_title == issue_title:
+                            print(f"Skipping existing comment at {comment['path']}:{comment['line']} (similar to {existing_line})")
+                            is_duplicate = True
+                            break
+                
+                if is_duplicate:
                     continue
 
                 # Skip if duplicate in this batch
@@ -483,12 +496,13 @@ class CommentPoster:
         headers: Dict[str, str],
     ) -> set:
         """
-        Fetch existing UNRESOLVED review comment locations to avoid re-posting.
-        Resolved comments are not included here - they'll be fetched separately
-        for the AI to review and validate the resolution.
+        Fetch existing review comment locations to avoid re-posting.
+        
+        Returns locations with anchor signature support for better deduplication.
+        Uses comment body snippet to detect duplicates even if line number changes slightly.
 
         Returns:
-            Set of (file_path, line) tuples for existing UNRESOLVED comments
+            Set of (file_path, line, body_snippet) tuples for existing comments
         """
         url = f"{self.github_api_url}/repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments"
 
@@ -505,8 +519,24 @@ class CommentPoster:
             for comment in comments:
                 path = comment.get("path")
                 line = comment.get("line") or comment.get("original_line")
+                body = comment.get("body", "")
+                
+                # Extract title from body for fingerprinting
+                # Look for pattern: ## <emoji> Accessibility Issue: <title>
+                body_snippet = ""
+                if "Accessibility Issue:" in body:
+                    try:
+                        # Extract the title part
+                        title_start = body.index("Accessibility Issue:") + len("Accessibility Issue:")
+                        title_end = body.index("\n", title_start)
+                        body_snippet = body[title_start:title_end].strip()[:50]
+                    except (ValueError, IndexError):
+                        # Fallback to first 50 chars of body
+                        body_snippet = body[:50].strip()
+                
                 if path and line:
-                    locations.add((path, line))
+                    # Store with body snippet for anchor-based matching
+                    locations.add((path, line, body_snippet))
 
             return locations
 

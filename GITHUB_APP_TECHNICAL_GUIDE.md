@@ -102,52 +102,155 @@ def is_no_issues_placeholder(issue: Dict) -> bool:
 - Cleaner PR reviews without noise
 - Only real issues are posted
 
-### 5. Semantic Anchor Resolution
+### 5. Deterministic Diff-Grounded Anchor Resolution
 
-**Problem:** Comments could land on valid but semantically wrong lines (e.g., a Slider issue anchored to a Text label line instead of the `Slider(` call).
+**Problem:** Comments could land on valid but semantically wrong lines (e.g., a Slider issue anchored to a Text label line instead of the `Slider(` call). Reruns could post duplicate-ish comments because dedupe was line-sensitive and existing comment detection could miss prior anchors.
 
-**Solution:** Implemented `SemanticAnchorResolver` that intelligently resolves issue line numbers to the correct UI element:
+**Solution:** Implemented deterministic `anchor_text` resolution system that reliably places PR review comments on the correct UI element line:
+
+#### 5.1 Model Schema Extension
+
+The AI model output now supports an optional `anchor_text` field for each issue:
+
+```json
+{
+  "file": "Settings.kt",
+  "line": 14,
+  "title": "Slider missing accessibility label",
+  "anchor_text": "Slider(",
+  "wcag_sc": "4.1.2",
+  ...
+}
+```
+
+**Prompt guidance:**
+- `anchor_text` should be an exact substring/line from the PR diff (RIGHT side)
+- Choose the specific UI call/declaration line (e.g., `Slider(`, `Toggle("", isOn:`, `<input type="range"`)
+- Ensure the chosen anchor exists in the diff
+- Field is optional - if missing, system infers candidates automatically
+
+#### 5.2 Diff-Grounded Anchoring Algorithm
+
+The `resolve_anchor_line` function implements deterministic anchoring:
 
 ```python
 from app.semantic_anchor_resolver import SemanticAnchorResolver
 
-# Extract line texts from diff
+# Build right_line_to_text mapping from diff
 line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
     diff_text, commentable_lines
 )
 
-# Resolve issue to semantic anchor (e.g., Slider( line)
-resolved_line = SemanticAnchorResolver.resolve_issue_line(
-    issue,
-    file_path,
-    commentable_lines[file_path],
-    line_texts[file_path],
-    max_distance=20
+# Resolve issue to exact anchor
+resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+    issue=issue,
+    right_line_to_text=line_texts[file_path],
+    fallback_line=issue.get('line'),
+    file_extension='.kt',  # For framework inference
+    debug=True  # Enable via DEBUG_ANCHOR_RESOLUTION env var
 )
 ```
 
-**Algorithm:**
-1. Extract anchor candidates from issue metadata:
-   - Explicit `anchor_text` field (future-proofing)
-   - Keywords from title/description (e.g., "slider" → `Slider(` patterns)
+**Algorithm steps:**
+1. **If `issue.anchor_text` exists:** Search for it in `right_line_to_text` (case-sensitive then case-insensitive)
+2. **If missing:** Infer anchor candidates from:
+   - Keywords in issue title/description (e.g., "slider" → `Slider(` patterns)
    - UI element names (e.g., "Button" → `Button(`, `<Button`, `UIButton`)
+   - File extension-based framework patterns
+3. **If multiple matches:** Choose match closest to `issue.line` if provided, otherwise nearest to `fallback_line`, or first match in line-number order
+4. **If no match:** Return None and fall back to nearest-commentable-line behavior
 
-2. Search for candidates in commentable line texts
-3. Choose match closest to model-proposed line (within max_distance)
-4. Fall back to nearest commentable line if no semantic match found
+#### 5.3 Cross-Framework Inference Rules
 
-**Framework support:**
-- **Compose/Kotlin:** `Slider(`, `Switch(`, `Button(`, `Text(`, `TextField(`, `.clickable`, `.semantics`, `Modifier.`
-- **Android XML:** `<SeekBar`, `<Button`, `android:contentDescription`, `android:hint`, `android:text`
-- **SwiftUI:** `Slider(`, `Toggle(`, `Button(`, `Text(`, `.accessibilityLabel`, `.accessibilityHint`
-- **UIKit:** `UISlider`, `UIButton`, `UILabel`, `UITextField`, `accessibilityLabel`, `accessibilityTraits`
-- **React/JSX/TSX/HTML:** `<button`, `<input`, `<img`, `aria-label`, `aria-labelledby`, `role=`, `onClick`
+Comprehensive pattern matching across all major UI frameworks:
+
+**Compose/Kotlin (`.kt`, `.kts`):**
+- `Slider(`, `RangeSlider(`, `Switch(`, `Checkbox(`, `RadioButton(`
+- `TextField(`, `OutlinedTextField(`, `Button(`, `IconButton(`
+- `.clickable`, `clickable(`, `.semantics`, `contentDescription =`
+
+**Android XML (`.xml`):**
+- `<Button`, `<ImageView`, `<TextView`, `<EditText`, `<Switch`, `<SeekBar`
+- `android:contentDescription`, `android:hint`, `android:labelFor`
+
+**SwiftUI (`.swift`):**
+- `Slider(`, `Toggle(`, `Button(`, `TextField(`, `.labelsHidden()`
+- `.accessibilityLabel`, `.accessibilityValue`, `.accessibilityHint`
+
+**UIKit (`.swift`, `.m`, `.mm`):**
+- `UIButton`, `UILabel`, `UISlider`, `UISwitch`
+- `accessibilityLabel`, `accessibilityHint`
+
+**Web (`.tsx`, `.jsx`, `.js`, `.html`, `.css`):**
+- `<input`, `type="checkbox"`, `type="range"`, `<button`
+- `aria-label`, `aria-labelledby`, `role=`, `alt=`, `onClick=`
+
+#### 5.4 Enhanced Deduplication
+
+**Anchor Signature Fingerprinting:**
+
+Issue fingerprints now include an `anchor_signature` derived from:
+- Resolved anchor text (normalized, first 40 chars)
+- OR explicit `anchor_text` from model
+- Combined with file path, WCAG SC, title, and line bucket
+
+```python
+# Fingerprint with anchor signature
+def _compute_issue_fingerprint(issue: Dict) -> str:
+    anchor_sig = ""
+    if issue.get("_anchor_matched_text"):
+        matched = str(issue.get("_anchor_matched_text", "")).strip()
+        anchor_sig = "".join(matched.split()).lower()[:40]
+    elif issue.get("anchor_text"):
+        anchor = str(issue.get("anchor_text", "")).strip()
+        anchor_sig = "".join(anchor.split()).lower()[:40]
+    
+    if anchor_sig:
+        fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}|{anchor_sig}"
+    else:
+        fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
+    
+    return hashlib.md5(fingerprint_str.encode()).hexdigest()
+```
+
+**Existing Comment Detection:**
+
+Fetches existing PR review comments with body snippets for better matching:
+- Matches by location AND title (within 5 lines)
+- Prevents rerun duplicates even if line number shifts slightly
+- Anchor-based similarity detection
+
+#### 5.5 Debug Logging
+
+Enable detailed anchoring logs with environment variable:
+
+```bash
+export DEBUG_ANCHOR_RESOLUTION=1
+```
+
+Output includes:
+- Proposed line, anchor_text, inferred candidates
+- Matches found and selection criteria
+- Resolved line and matched line text
+- Fallback decisions
+
+Example output:
+```
+[anchor] Resolving Settings.kt:13
+[anchor] Issue: Slider missing accessibility label
+[anchor] Using explicit anchor_text: Slider(
+[anchor] Found 1 matches
+[anchor] Single match at line 14: Slider(
+✓ Adjusted Settings.kt:13 -> 14 (anchor: Slider()
+```
 
 **Benefits:**
-- Comments anchor to the actual UI element causing the issue
+- Comments anchor deterministically to the actual UI element
+- Prevents duplicate comments on reruns
 - Robust across multiple UI frameworks and languages
-- Backwards compatible (works with or without explicit anchor hints)
+- Backwards compatible (works with or without explicit anchor_text)
 - Falls back gracefully when no semantic match found
+- Improved dedupe with anchor signatures
 
 ### 6. Android XML Layout Support
 

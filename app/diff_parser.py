@@ -5,8 +5,10 @@ Parses unified diffs and provides accurate line mapping for GitHub PR comments.
 Handles per-file diff filtering and commentable line extraction.
 """
 
+import os
 import re
 from typing import Dict, List, Tuple, Optional, Set
+from pathlib import Path
 
 
 class DiffParser:
@@ -275,14 +277,14 @@ def validate_issues_in_batch(
     """
     Validate and adjust issues to ensure they're in the batch and on commentable lines.
 
-    Uses semantic anchor resolution to find the correct UI element declaration/call site
-    before falling back to nearest commentable line.
+    Uses deterministic diff-grounded anchor resolution to find the correct UI element
+    declaration/call site before falling back to nearest commentable line.
 
     Args:
         issues: List of issues from model
         batch_files: List of files in current batch
         commentable_lines: Dict of file -> commentable line numbers
-        diff_text: Optional unified diff text for semantic anchor resolution
+        diff_text: Optional unified diff text for anchor resolution
 
     Returns:
         List of validated issues (may be adjusted or filtered)
@@ -292,7 +294,10 @@ def validate_issues_in_batch(
     validated = []
     batch_file_set = set(batch_files)
 
-    # Extract line texts for semantic resolution if diff provided
+    # Check if debug logging is enabled
+    debug_enabled = os.getenv("DEBUG_ANCHOR_RESOLUTION", "").lower() in ["1", "true", "yes"]
+
+    # Extract line texts for anchor resolution if diff provided
     line_texts = {}
     if diff_text:
         line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
@@ -317,25 +322,40 @@ def validate_issues_in_batch(
         if file_path in commentable_lines:
             file_commentable = commentable_lines[file_path]
             if line not in file_commentable:
-                # Try semantic anchor resolution first
+                # Try deterministic anchor resolution first
                 resolved_line = None
+                matched_text = None
+                
                 if diff_text and file_path in line_texts:
-                    resolved_line = SemanticAnchorResolver.resolve_issue_line(
-                        issue,
-                        file_path,
-                        file_commentable,
-                        line_texts[file_path],
-                        max_distance=20
+                    # Get file extension for framework inference
+                    file_ext = Path(file_path).suffix
+                    
+                    # Build right_line_to_text mapping for this file
+                    right_line_to_text = line_texts[file_path]
+                    
+                    if debug_enabled:
+                        print(f"  [anchor] Resolving {file_path}:{line}")
+                        print(f"  [anchor] Issue: {issue.get('title', '')[:80]}")
+                    
+                    # Use new deterministic resolve_anchor_line function
+                    resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+                        issue=issue,
+                        right_line_to_text=right_line_to_text,
+                        fallback_line=line,
+                        file_extension=file_ext,
+                        debug=debug_enabled
                     )
 
                 if resolved_line:
-                    print(f"  Adjusted {file_path}:{line} -> {resolved_line} (semantic anchor)")
+                    print(f"  ✓ Adjusted {file_path}:{line} -> {resolved_line} (anchor: {matched_text[:60] if matched_text else 'N/A'})")
                     issue['line'] = resolved_line
+                    # Store matched text for fingerprinting
+                    issue['_anchor_matched_text'] = matched_text
                 else:
                     # Fall back to nearest commentable line
                     nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
                     if nearest:
-                        print(f"  Adjusted {file_path}:{line} -> {nearest} (nearest commentable)")
+                        print(f"  ⚠️  Adjusted {file_path}:{line} -> {nearest} (nearest commentable, no anchor found)")
                         issue['line'] = nearest
                     else:
                         print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
