@@ -116,14 +116,21 @@ class PRReviewer:
 
             # Create prompt
             prompt = self._create_review_prompt(
-                batch_diff, file_batch, platforms, guides, existing_comments, review_threads
+                batch_diff,
+                file_batch,
+                platforms,
+                guides,
+                existing_comments,
+                review_threads,
             )
 
             # Call Scout AI
             raw_issues = self._review_with_scout(prompt)
 
             # Filter out "no issues" placeholders
-            raw_issues = [issue for issue in raw_issues if not is_no_issues_placeholder(issue)]
+            raw_issues = [
+                issue for issue in raw_issues if not is_no_issues_placeholder(issue)
+            ]
 
             # Normalize issues
             normalized_issues = []
@@ -142,7 +149,11 @@ class PRReviewer:
             all_issues.extend(validated_issues)
 
             # Post comments progressively every N batches
-            if on_batch_complete and len(all_issues) > 0 and (batch_idx + 1) % batch_size_for_posting == 0:
+            if (
+                on_batch_complete
+                and len(all_issues) > 0
+                and (batch_idx + 1) % batch_size_for_posting == 0
+            ):
                 # Deduplicate current batch
                 deduped = self._dedupe_issues(all_issues)
                 if deduped:
@@ -184,34 +195,62 @@ class PRReviewer:
 
         # Add existing comments section if provided
         if existing_comments:
-            parts.extend([
-                "# Existing Comments",
-                "The following locations already have accessibility comments posted:",
-                "",
-            ])
-            for file_path, line_num in existing_comments:
-                parts.append(f"- {file_path}:{line_num}")
-            parts.extend([
-                "",
-                "IMPORTANT: Do NOT report issues at these locations or within 5 lines of them.",
-                "These issues have already been identified and commented on.",
-                "",
-            ])
+            parts.extend(
+                [
+                    "# Existing Comments",
+                    "The following locations already have accessibility comments posted:",
+                    "",
+                ]
+            )
+            for entry in existing_comments:
+                # Handle different entry shapes for backward compatibility
+                file_path = None
+                line_num = None
+
+                if isinstance(entry, dict):
+                    # Dict entry: {'file': ..., 'line': ...} or {'path': ..., 'line': ...}
+                    file_path = entry.get("file") or entry.get("path")
+                    line_num = entry.get("line")
+                elif isinstance(entry, (list, tuple)):
+                    # Tuple/list entry: (file_path, line_num, ...) - use first two
+                    if len(entry) >= 2:
+                        file_path = entry[0]
+                        line_num = entry[1]
+                else:
+                    # Unsupported shape - skip gracefully
+                    continue
+
+                # Only add if we have both values (explicit None checks to handle line 0)
+                if file_path is not None and line_num is not None:
+                    parts.append(f"- {file_path}:{line_num}")
+
+            parts.extend(
+                [
+                    "",
+                    "IMPORTANT: Do NOT report issues at these locations or within 5 lines of them.",
+                    "These issues have already been identified and commented on.",
+                    "",
+                ]
+            )
 
         # Add review threads with replies for resolution validation
         if review_threads:
-            parts.extend([
-                "# Previous Review Discussions",
-                "Below are previous accessibility comments and their discussion threads.",
-                "Your job is to:",
-                "1. Check if issues mentioned in these threads are actually fixed in the current diff",
-                "2. If someone replied 'resolved' or 'fixed' but the code still has the issue, CHALLENGE IT",
-                "3. If the resolution was insufficient (e.g., 'wontfix' without good reason), POST A FOLLOW-UP",
-                "",
-            ])
+            parts.extend(
+                [
+                    "# Previous Review Discussions",
+                    "Below are previous accessibility comments and their discussion threads.",
+                    "Your job is to:",
+                    "1. Check if issues mentioned in these threads are actually fixed in the current diff",
+                    "2. If someone replied 'resolved' or 'fixed' but the code still has the issue, CHALLENGE IT",
+                    "3. If the resolution was insufficient (e.g., 'wontfix' without good reason), POST A FOLLOW-UP",
+                    "",
+                ]
+            )
 
             for thread in review_threads:
-                if thread.get("replies"):  # Only show threads with replies (discussions)
+                if thread.get(
+                    "replies"
+                ):  # Only show threads with replies (discussions)
                     parts.append(f"## Thread: {thread['path']}:{thread['line']}")
                     parts.append(f"**Original Comment by @{thread['user']}:**")
                     parts.append(thread["body"][:500])  # Truncate long comments
@@ -223,96 +262,104 @@ class PRReviewer:
                             parts.append(f"- @{reply['user']}: {reply['body'][:300]}")
                         parts.append("")
 
-            parts.extend([
-                "",
-                "**Resolution Validation Task:**",
-                "- If any discussed issue STILL EXISTS in the current diff, report it again with context",
-                "- If someone claimed to fix it but didn't, call it out: 'Previously marked resolved but issue persists'",
-                "- Be respectful but firm about accessibility requirements",
-                "",
-            ])
+            parts.extend(
+                [
+                    "",
+                    "**Resolution Validation Task:**",
+                    "- If any discussed issue STILL EXISTS in the current diff, report it again with context",
+                    "- If someone claimed to fix it but didn't, call it out: 'Previously marked resolved but issue persists'",
+                    "- Be respectful but firm about accessibility requirements",
+                    "",
+                ]
+            )
 
-        parts.extend([
-            "# Task",
-            "Review ONLY the changed code in this diff for accessibility issues.",
-            "Focus on labels/hints/roles, interactive elements, images/icons alt text, form inputs, touch targets, Dynamic Type/font scaling, semantics, and contrast.",
-            "",
-            "# CRITICAL: Issue Consolidation",
-            "BEFORE reporting issues, consolidate similar/related issues that are close together:",
-            "- If multiple UI elements within 5 lines have the SAME problem (e.g., all missing labels), report ONE issue that mentions all affected elements",
-            "- Example: Instead of 2 separate comments for 'Button on line 15 missing label' and 'Button on line 19 missing label',",
-            "  Report ONE: 'Multiple buttons missing labels (lines 15, 19)'",
-            "- Choose the FIRST line number as the location when consolidating",
-            "- Only consolidate issues that are IDENTICAL in nature (same WCAG SC, same fix)",
-            "- Do NOT consolidate issues that are different even if they're close together",
-            "",
-            "# Guidelines",
-            guides,
-            "",
-            "# PR Diff (Batch Only)",
-            "```diff",
-            pr_diff,
-            "```",
-            "",
-            "# CRITICAL: Line Number Accuracy",
-            "Getting the EXACT line number is CRITICAL for inline comments to appear at the right location.",
-            "",
-            "How to count line numbers in diffs:",
-            "1. Find the hunk header: '@@ -old_start,old_count +NEW_START,new_count @@'",
-            "2. The +NEW_START is the line number for the FIRST LINE after the header",
-            "3. Count EVERY line that starts with '+' or ' ' (space) from that point",
-            "4. Lines starting with '-' do NOT count (they're removed lines)",
-            "",
-            "Example:",
-            "```",
-            "@@ -10,5 +25,8 @@ function MyComponent() {",
-            " export function Button() {           // Line 25 (NEW_START)",
-            "+  const [state, setState] = useState() // Line 26 (+ means added)",
-            "   return (",
-            "-    <button>                          // DON'T COUNT (- means removed)",
-            "+    <button                           // Line 27",
-            "+      onClick=",
-            "{...}                 // Line 28",
-            "+    >                                  // Line 29",
-            "       Click                            // Line 30",
-            "     </button>",
-            "   )",
-            " }",
-            "```",
-            "",
-            "Report the line number where the PROBLEMATIC CODE actually appears.",
-            "NOT the function name, NOT the component name, but the EXACT line with the issue.",
-            "",
-            "# Output Format (STRICT)",
-            "Return ONLY a valid JSON array. No markdown. No prose. No code fences.",
-            "If no issues found, return: []",
-            "",
-            "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
-            'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
-            "",
-            "OPTIONAL field (highly recommended for accurate inline comment placement):",
-            '- anchor_text: An exact substring/line from the diff that identifies WHERE to place the comment.',
-            "  This should be the EXACT code line to comment on (e.g., 'Slider(', 'Toggle(\"Enable\", isOn:', '<input type=\"range\"', 'android:contentDescription=', '.clickable {', '<Button').",
-            "  Choose the specific UI call/declaration line and ensure it exists in the diff shown above.",
-            "  If provided, this helps ensure the comment appears at the precise UI element line.",
-            "",
-            "Rules:",
-            "- Report issues ONLY in the CHANGED code shown in this batch diff.",
-        ])
+        parts.extend(
+            [
+                "# Task",
+                "Review ONLY the changed code in this diff for accessibility issues.",
+                "Focus on labels/hints/roles, interactive elements, images/icons alt text, form inputs, touch targets, Dynamic Type/font scaling, semantics, and contrast.",
+                "",
+                "# CRITICAL: Issue Consolidation",
+                "BEFORE reporting issues, consolidate similar/related issues that are close together:",
+                "- If multiple UI elements within 5 lines have the SAME problem (e.g., all missing labels), report ONE issue that mentions all affected elements",
+                "- Example: Instead of 2 separate comments for 'Button on line 15 missing label' and 'Button on line 19 missing label',",
+                "  Report ONE: 'Multiple buttons missing labels (lines 15, 19)'",
+                "- Choose the FIRST line number as the location when consolidating",
+                "- Only consolidate issues that are IDENTICAL in nature (same WCAG SC, same fix)",
+                "- Do NOT consolidate issues that are different even if they're close together",
+                "",
+                "# Guidelines",
+                guides,
+                "",
+                "# PR Diff (Batch Only)",
+                "```diff",
+                pr_diff,
+                "```",
+                "",
+                "# CRITICAL: Line Number Accuracy",
+                "Getting the EXACT line number is CRITICAL for inline comments to appear at the right location.",
+                "",
+                "How to count line numbers in diffs:",
+                "1. Find the hunk header: '@@ -old_start,old_count +NEW_START,new_count @@'",
+                "2. The +NEW_START is the line number for the FIRST LINE after the header",
+                "3. Count EVERY line that starts with '+' or ' ' (space) from that point",
+                "4. Lines starting with '-' do NOT count (they're removed lines)",
+                "",
+                "Example:",
+                "```",
+                "@@ -10,5 +25,8 @@ function MyComponent() {",
+                " export function Button() {           // Line 25 (NEW_START)",
+                "+  const [state, setState] = useState() // Line 26 (+ means added)",
+                "   return (",
+                "-    <button>                          // DON'T COUNT (- means removed)",
+                "+    <button                           // Line 27",
+                "+      onClick=",
+                "{...}                 // Line 28",
+                "+    >                                  // Line 29",
+                "       Click                            // Line 30",
+                "     </button>",
+                "   )",
+                " }",
+                "```",
+                "",
+                "Report the line number where the PROBLEMATIC CODE actually appears.",
+                "NOT the function name, NOT the component name, but the EXACT line with the issue.",
+                "",
+                "# Output Format (STRICT)",
+                "Return ONLY a valid JSON array. No markdown. No prose. No code fences.",
+                "If no issues found, return: []",
+                "",
+                "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
+                'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
+                "",
+                "OPTIONAL field (highly recommended for accurate inline comment placement):",
+                "- anchor_text: An exact substring/line from the diff that identifies WHERE to place the comment.",
+                "  This should be the EXACT code line to comment on (e.g., 'Slider(', 'Toggle(\"Enable\", isOn:', '<input type=\"range\"', 'android:contentDescription=', '.clickable {', '<Button').",
+                "  Choose the specific UI call/declaration line and ensure it exists in the diff shown above.",
+                "  If provided, this helps ensure the comment appears at the precise UI element line.",
+                "",
+                "Rules:",
+                "- Report issues ONLY in the CHANGED code shown in this batch diff.",
+            ]
+        )
 
         # Add rule about existing comments if any exist
         if existing_comments:
-            parts.append("- Do NOT report issues at locations that already have comments (or within 5 lines of them).")
+            parts.append(
+                "- Do NOT report issues at locations that already have comments (or within 5 lines of them)."
+            )
 
-        parts.extend([
-            "- CONSOLIDATE identical issues within 5 lines into ONE comment mentioning all affected lines.",
-            "- The 'line' field MUST be the EXACT line number in the NEW file where the issue occurs (not a guess or range).",
-            "- Count carefully from the '@@ ... +START ...' marker to get the correct line number.",
-            "- Point to the specific line with the problem (e.g., the line with contentDescription=null, not the function declaration).",
-            "- wcag_sc MUST be a single string. If multiple SC apply, join with '; '.",
-            f"- current_code and suggested_fix must be short snippets (max {self.max_snippet_lines} lines each).",
-            "- resources MUST be an array of strings (or empty array []).",
-        ])
+        parts.extend(
+            [
+                "- CONSOLIDATE identical issues within 5 lines into ONE comment mentioning all affected lines.",
+                "- The 'line' field MUST be the EXACT line number in the NEW file where the issue occurs (not a guess or range).",
+                "- Count carefully from the '@@ ... +START ...' marker to get the correct line number.",
+                "- Point to the specific line with the problem (e.g., the line with contentDescription=null, not the function declaration).",
+                "- wcag_sc MUST be a single string. If multiple SC apply, join with '; '.",
+                f"- current_code and suggested_fix must be short snippets (max {self.max_snippet_lines} lines each).",
+                "- resources MUST be an array of strings (or empty array []).",
+            ]
+        )
 
         return "\n".join(parts)
 
@@ -476,24 +523,24 @@ class PRReviewer:
         # Normalize components
         file_path = str(issue.get("file", "")).strip()
         line = issue.get("line", 0)
-        
+
         # Normalize line to nearest 5 to catch near-duplicates
         # (e.g., line 42 and 44 would both map to 40)
         line_bucket = (line // 5) * 5
-        
+
         # Normalize WCAG SC (remove spaces, lowercase, take first if multiple)
         wcag_sc = str(issue.get("wcag_sc", "")).strip().lower()
         if ";" in wcag_sc:
             wcag_sc = wcag_sc.split(";")[0].strip()
         wcag_sc = wcag_sc.replace(" ", "")
-        
+
         # Normalize title (lowercase, remove extra whitespace)
         title = str(issue.get("title", "")).strip().lower()
         title = " ".join(title.split())  # Normalize whitespace
-        
+
         # Truncate title to first 50 chars for fingerprint
         title_key = title[:50]
-        
+
         # Add anchor signature if available
         # This improves dedupe by including the actual code line that was matched
         anchor_sig = ""
@@ -506,13 +553,15 @@ class PRReviewer:
             # Use explicit anchor_text from model
             anchor = str(issue.get("anchor_text", "")).strip()
             anchor_sig = "".join(anchor.split()).lower()[:40]
-        
+
         # Build fingerprint with anchor signature if available
         if anchor_sig:
-            fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}|{anchor_sig}"
+            fingerprint_str = (
+                f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}|{anchor_sig}"
+            )
         else:
             fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
-        
+
         # Hash for consistent length
         return hashlib.md5(fingerprint_str.encode()).hexdigest()
 
