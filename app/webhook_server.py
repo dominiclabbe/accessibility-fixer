@@ -405,6 +405,18 @@ def handle_pull_request(payload: dict):
             f"Changed files: {len(changed_files)} (filtered from {len(all_files)} total)"
         )
 
+        # DEBUG_WEB_REVIEW: Log changed files categorization
+        if os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]:
+            web_extensions = {".tsx", ".jsx", ".ts", ".js", ".html", ".css"}
+            web_files = [f for f in changed_files if any(f.endswith(ext) for ext in web_extensions)]
+            non_web_files = [f for f in changed_files if f not in web_files]
+            
+            logger.info("[DEBUG_WEB_REVIEW] File categorization:")
+            logger.info(f"  All changed files ({len(all_files)}): {all_files}")
+            logger.info(f"  Filtered reviewable files ({len(changed_files)}): {changed_files}")
+            logger.info(f"  Web files ({len(web_files)}): {web_files}")
+            logger.info(f"  Non-web files ({len(non_web_files)}): {non_web_files}")
+
         # Exit early if no reviewable files
         if not changed_files:
             logger.info("No reviewable files found after filtering. Skipping review.")
@@ -614,6 +626,10 @@ def handle_pull_request(payload: dict):
             """Callback to post comments progressively as batches complete."""
             nonlocal all_issues, posted_locations
 
+            # DEBUG_WEB_REVIEW: Track skipped issues
+            debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+            skipped_issues = []
+
             # Filter out issues at locations we've already posted or near existing comments
             new_issues = []
             for issue in issues:
@@ -626,6 +642,13 @@ def handle_pull_request(payload: dict):
                 # Check exact match first
                 if location in posted_locations:
                     logger.info(f"Skipping already posted location: {file_path}:{line}")
+                    if debug_web_review:
+                        skipped_issues.append({
+                            "file": file_path,
+                            "line": line,
+                            "title": issue_title[:60],
+                            "reason": "exact location already posted"
+                        })
                     continue
 
                 # Check for nearby existing comments with smart identity matching
@@ -653,11 +676,26 @@ def handle_pull_request(payload: dict):
                         + f" | Reason: {skip_reason} with existing comment at "
                         f"{matched_info}"
                     )
+                    
+                    if debug_web_review:
+                        skipped_issues.append({
+                            "file": file_path,
+                            "line": line,
+                            "title": issue_title[:60],
+                            "reason": f"{skip_reason} with existing at {matched_info}"
+                        })
                     continue
 
                 # This is a new location, add it
                 new_issues.append(issue)
                 posted_locations.add(location)
+
+            # DEBUG_WEB_REVIEW: Log skip summary
+            if debug_web_review and skipped_issues:
+                logger.info("[DEBUG_WEB_REVIEW] Post-batch skip reasons:")
+                for skip in skipped_issues:
+                    logger.info(f"  {skip['file']}:{skip['line']} - {skip['reason']}")
+                    logger.info(f"    Title: {skip['title']}")
 
             if not new_issues:
                 logger.info("All issues in this batch already posted, skipping")
