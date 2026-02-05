@@ -93,6 +93,14 @@ class PRReviewer:
         all_issues = []
         batch_size_for_posting = 5  # Post every 5 batches
 
+        # DEBUG_WEB_REVIEW: Track web files in batches
+        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+        if debug_web_review:
+            from app.constants import WEB_EXTENSIONS
+            web_extensions = WEB_EXTENSIONS
+        else:
+            web_extensions = set()
+
         for batch_idx, file_batch in enumerate(batches):
             print(
                 f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
@@ -105,6 +113,7 @@ class PRReviewer:
                 continue
 
             # Truncate if too large
+            original_diff_size = len(batch_diff)
             if len(batch_diff) > self.max_diff_chars:
                 batch_diff = (
                     batch_diff[: self.max_diff_chars]
@@ -113,6 +122,22 @@ class PRReviewer:
 
             # Extract commentable lines for validation
             commentable_lines = DiffParser.extract_commentable_lines(batch_diff)
+
+            # DEBUG_WEB_REVIEW: Log batch composition and commentable lines
+            if debug_web_review:
+                web_files_in_batch = [f for f in file_batch if any(f.endswith(ext) for ext in web_extensions)]
+                print(f"[DEBUG_WEB_REVIEW] Batch {batch_idx + 1}/{len(batches)}:")
+                print(f"  Files in batch: {file_batch}")
+                print(f"  Web files in batch: {web_files_in_batch}")
+                print(f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})")
+                
+                # Log commentable lines per file
+                for file_path in file_batch:
+                    file_commentable = commentable_lines.get(file_path, {})
+                    print(f"  Commentable lines for {file_path}:")
+                    print(f"    Total commentable lines: {len(file_commentable)}")
+                    if file_commentable:
+                        print(f"    Line range: {min(file_commentable.keys())} - {max(file_commentable.keys())}")
 
             # Create prompt
             prompt = self._create_review_prompt(
@@ -126,6 +151,36 @@ class PRReviewer:
 
             # Call Scout AI
             raw_issues = self._review_with_scout(prompt)
+
+            # DEBUG_WEB_REVIEW: Log raw issues from LLM
+            if debug_web_review:
+                print(f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):")
+                print(f"  Total raw issues: {len(raw_issues)}")
+                
+                # Group by file
+                issues_by_file = {}
+                for issue in raw_issues:
+                    file_path = issue.get("file", "unknown")
+                    if file_path not in issues_by_file:
+                        issues_by_file[file_path] = []
+                    issues_by_file[file_path].append(issue)
+                
+                # Log grouped issues
+                for file_path, file_issues in issues_by_file.items():
+                    is_web = any(file_path.endswith(ext) for ext in web_extensions)
+                    print(f"  {file_path} ({'WEB' if is_web else 'NON-WEB'}): {len(file_issues)} issues")
+                    for idx, issue in enumerate(file_issues, 1):
+                        line = issue.get("line", "?")
+                        title = issue.get("title", "")[:60]
+                        print(f"    [{idx}] Line {line}: {title}")
+                
+                # Count web vs non-web issues
+                web_issue_count = sum(
+                    len(issues_by_file.get(f, []))
+                    for f in web_files_in_batch
+                )
+                total_issues = len(raw_issues)
+                print(f"  Web issues: {web_issue_count}/{total_issues}")
 
             # Filter out "no issues" placeholders
             raw_issues = [
@@ -491,6 +546,10 @@ class PRReviewer:
         """
         seen_fingerprints = set()
         out = []
+        
+        # Track dedupe drops for DEBUG_WEB_REVIEW
+        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+        dedupe_drops = []
 
         for issue in issues:
             fingerprint = self._compute_issue_fingerprint(issue)
@@ -503,6 +562,23 @@ class PRReviewer:
                 line = issue.get("line", 0)
                 title = issue.get("title", "")
                 print(f"  Skipping duplicate: {file_path}:{line} - {title[:50]}")
+                
+                if debug_web_review:
+                    dedupe_drops.append({
+                        "file": file_path,
+                        "line": line,
+                        "title": title[:60],
+                        "fingerprint": fingerprint,
+                        "reason": "duplicate fingerprint"
+                    })
+
+        # DEBUG_WEB_REVIEW: Log dedupe drops
+        if debug_web_review and dedupe_drops:
+            print("\n[DEBUG_WEB_REVIEW] Deduplication drops:")
+            for drop in dedupe_drops:
+                print(f"  {drop['file']}:{drop['line']} - {drop['reason']}")
+                print(f"    Title: {drop['title']}")
+                print(f"    Fingerprint: {drop['fingerprint']}")
 
         return out
 
