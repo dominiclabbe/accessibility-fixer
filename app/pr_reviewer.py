@@ -8,6 +8,7 @@ Adapted from scripts/pr-review-ci-scout.py for GitHub App context.
 import os
 import json
 import time
+import hashlib
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
@@ -15,6 +16,12 @@ try:
     import openai
 except ImportError:
     raise ImportError("openai library required. Install: pip install openai")
+
+from app.diff_parser import (
+    DiffParser,
+    validate_issues_in_batch,
+    is_no_issues_placeholder,
+)
 
 
 class PRReviewer:
@@ -91,9 +98,10 @@ class PRReviewer:
                 f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
             )
 
-            # Get diff for this batch
-            batch_diff = self._filter_diff_for_files(pr_diff, file_batch)
+            # Get diff for this batch using proper diff parser
+            batch_diff = DiffParser.filter_diff_for_files(pr_diff, file_batch)
             if not batch_diff:
+                print(f"  No diff content for batch {batch_idx + 1}, skipping")
                 continue
 
             # Truncate if too large
@@ -103,36 +111,34 @@ class PRReviewer:
                     + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
                 )
 
+            # Extract commentable lines for validation
+            commentable_lines = DiffParser.extract_commentable_lines(batch_diff)
+
             # Create prompt
             prompt = self._create_review_prompt(
                 batch_diff, file_batch, platforms, guides, existing_comments, review_threads
             )
 
             # Call Scout AI
-            issues = self._review_with_scout(prompt)
+            raw_issues = self._review_with_scout(prompt)
 
-            # Extract changed line ranges from diff for validation
-            changed_lines = self._extract_changed_lines(batch_diff)
+            # Filter out "no issues" placeholders
+            raw_issues = [issue for issue in raw_issues if not is_no_issues_placeholder(issue)]
 
-            # Normalize, validate line numbers, and add to results
-            for issue in issues:
+            # Normalize issues
+            normalized_issues = []
+            for issue in raw_issues:
                 normalized = self._normalize_issue(issue)
                 if normalized:
-                    # Validate and adjust line number if needed
-                    file_path = normalized.get("file", "")
-                    line = normalized.get("line", 0)
+                    normalized_issues.append(normalized)
 
-                    if file_path in changed_lines and line > 0:
-                        # Check if line is in changed ranges
-                        ranges = changed_lines[file_path]
-                        if not any(start <= line <= end for start, end in ranges):
-                            # Line is not in changed code, adjust to nearest changed line
-                            nearest = self._find_nearest_changed_line(line, ranges)
-                            if nearest:
-                                print(f"  Adjusted line {line} -> {nearest} for {file_path}")
-                                normalized["line"] = nearest
+            # Validate issues are in batch and on commentable lines
+            validated_issues = validate_issues_in_batch(
+                normalized_issues, file_batch, commentable_lines
+            )
 
-                    all_issues.append(normalized)
+            # Add validated issues to results
+            all_issues.extend(validated_issues)
 
             # Post comments progressively every N batches
             if on_batch_complete and len(all_issues) > 0 and (batch_idx + 1) % batch_size_for_posting == 0:
@@ -418,21 +424,71 @@ class PRReviewer:
 
     def _dedupe_issues(self, issues: List[Dict]) -> List[Dict]:
         """
-        Remove duplicate issues.
+        Remove duplicate issues using fingerprinting.
 
-        Keeps only ONE issue per file+line location, regardless of title/description.
-        Scout AI often returns multiple variations of the same issue with slightly
-        different wording, so we dedupe aggressively by location only.
+        Uses a stable fingerprint based on:
+        - File path
+        - WCAG SC (normalized)
+        - Title (normalized)
+        - Line number (with tolerance for near-duplicates)
+
+        This prevents duplicate issues while allowing different issues
+        at the same location.
         """
-        seen = set()
+        seen_fingerprints = set()
         out = []
 
         for issue in issues:
-            file_path = str(issue.get("file", ""))
-            line = issue.get("line", 0)
+            fingerprint = self._compute_issue_fingerprint(issue)
 
-            # Dedupe by file+line only - keep first occurrence at each location
-            location_key = (file_path, line)
+            if fingerprint not in seen_fingerprints:
+                seen_fingerprints.add(fingerprint)
+                out.append(issue)
+            else:
+                file_path = issue.get("file", "")
+                line = issue.get("line", 0)
+                title = issue.get("title", "")
+                print(f"  Skipping duplicate: {file_path}:{line} - {title[:50]}")
+
+        return out
+
+    @staticmethod
+    def _compute_issue_fingerprint(issue: Dict) -> str:
+        """
+        Compute a stable fingerprint for an issue.
+
+        Args:
+            issue: Issue dict
+
+        Returns:
+            Fingerprint string
+        """
+        # Normalize components
+        file_path = str(issue.get("file", "")).strip()
+        line = issue.get("line", 0)
+        
+        # Normalize line to nearest 5 to catch near-duplicates
+        # (e.g., line 42 and 44 would both map to 40)
+        line_bucket = (line // 5) * 5
+        
+        # Normalize WCAG SC (remove spaces, lowercase, take first if multiple)
+        wcag_sc = str(issue.get("wcag_sc", "")).strip().lower()
+        if ";" in wcag_sc:
+            wcag_sc = wcag_sc.split(";")[0].strip()
+        wcag_sc = wcag_sc.replace(" ", "")
+        
+        # Normalize title (lowercase, remove extra whitespace)
+        title = str(issue.get("title", "")).strip().lower()
+        title = " ".join(title.split())  # Normalize whitespace
+        
+        # Truncate title to first 50 chars for fingerprint
+        title_key = title[:50]
+        
+        # Build fingerprint
+        fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
+        
+        # Hash for consistent length
+        return hashlib.md5(fingerprint_str.encode()).hexdigest()
 
             if location_key not in seen:
                 seen.add(location_key)
@@ -457,81 +513,6 @@ class PRReviewer:
             size = 1
         for i in range(0, len(items), size):
             yield items[i : i + size]
-
-    @staticmethod
-    def _filter_diff_for_files(full_diff: str, files: List[str]) -> str:
-        """
-        Filter diff to only include specified files.
-
-        This is a simplified implementation. For production, you might want
-        to use a proper diff parser like `whatthepatch` or `unidiff`.
-        """
-        # For now, return full diff
-        # TODO: Implement proper diff filtering by file
-        return full_diff
-
-    @staticmethod
-    def _extract_changed_lines(diff: str) -> Dict[str, List[Tuple[int, int]]]:
-        """
-        Extract changed line ranges from git diff.
-
-        Returns dict of {filename: [(start_line, end_line), ...]}
-        """
-        import re
-
-        changed_lines = {}
-        current_file = None
-        current_line = 0
-
-        for line in diff.split("\n"):
-            # Match file headers like: +++ b/path/to/file.kt
-            file_match = re.match(r'\+\+\+ b/(.+)$', line)
-            if file_match:
-                current_file = file_match.group(1)
-                changed_lines[current_file] = []
-                continue
-
-            # Match hunk headers like: @@ -10,5 +14,8 @@
-            hunk_match = re.match(r'@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
-            if hunk_match and current_file:
-                start = int(hunk_match.group(1))
-                count = int(hunk_match.group(2)) if hunk_match.group(2) else 1
-                current_line = start
-                # Add range for this hunk
-                if count > 0:
-                    changed_lines[current_file].append((start, start + count - 1))
-                continue
-
-        return changed_lines
-
-    @staticmethod
-    def _find_nearest_changed_line(target: int, ranges: List[Tuple[int, int]]) -> Optional[int]:
-        """Find the nearest changed line to the target line."""
-        if not ranges:
-            return None
-
-        # Find the range that's closest to the target
-        min_distance = float('inf')
-        nearest = None
-
-        for start, end in ranges:
-            if start <= target <= end:
-                # Target is already in a changed range
-                return target
-
-            # Check distance to start and end of range
-            dist_to_start = abs(target - start)
-            dist_to_end = abs(target - end)
-
-            if dist_to_start < min_distance:
-                min_distance = dist_to_start
-                nearest = start
-
-            if dist_to_end < min_distance:
-                min_distance = dist_to_end
-                nearest = end
-
-        return nearest
 
     @staticmethod
     def _is_transient_error(msg: str) -> bool:
