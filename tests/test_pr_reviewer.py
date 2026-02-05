@@ -69,10 +69,16 @@ class TestPRReviewerExistingComments:
         assert "file1.swift:10" in prompt
         assert "file2.swift:25" in prompt
         assert "file3.kt:30" in prompt
-        # Should NOT include the third element (anchor_signature) in the location list
-        assert (
-            "Button missing label" not in prompt or "- file" in prompt
-        )  # Not in location line
+        # The third element (body snippet) should not appear as part of the location line
+        # Verify format is "- file:line" not "- file:line:snippet"
+        lines = prompt.split("\n")
+        location_lines = [l for l in lines if l.startswith("- ") and ":" in l]
+        for loc_line in location_lines:
+            # Each location line should be "- path:line" format, not include extra data
+            parts = loc_line.replace("- ", "").split(":")
+            assert (
+                len(parts) == 2
+            ), f"Location line should be '- path:line' format: {loc_line}"
         assert "Do NOT report issues at these locations" in prompt
 
     def test_create_prompt_with_dict_existing_comments(self, reviewer):
@@ -151,12 +157,24 @@ class TestPRReviewerExistingComments:
         assert "# Existing Comments" in prompt
         # Only the valid entry should appear
         assert "file1.swift:10" in prompt
-        # Malformed entries should not appear
-        assert "single_value" not in prompt
-        assert "file2.swift:" not in prompt  # Missing line
+        # Verify malformed entries don't appear as valid "path:line" patterns
+        # Look specifically in the Existing Comments section
+        sections = prompt.split("# ")
+        existing_section = None
+        for section in sections:
+            if section.startswith("Existing Comments"):
+                existing_section = section
+                break
+        assert existing_section is not None
+        # Count location lines in existing comments section only
+        location_lines = [
+            l.strip() for l in existing_section.split("\n") if l.strip().startswith("- ") and ":" in l
+        ]
+        # Should only have 1 valid location from the valid 2-tuple
         assert (
-            ":50" not in prompt.split("file1.swift:10")[1]
-        )  # Line without file after valid entry
+            len(location_lines) == 1
+        ), f"Expected 1 location line, found {len(location_lines)}: {location_lines}"
+        assert location_lines[0] == "- file1.swift:10"
 
     def test_create_prompt_with_empty_existing_comments(self, reviewer):
         """Test that empty existing_comments list doesn't add the section."""

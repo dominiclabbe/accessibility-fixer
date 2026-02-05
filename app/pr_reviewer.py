@@ -220,8 +220,8 @@ class PRReviewer:
                     # Unsupported shape - skip gracefully
                     continue
 
-                # Only add if we have both values
-                if file_path and line_num:
+                # Only add if we have both values (explicit None checks to handle line 0)
+                if file_path is not None and line_num is not None:
                     parts.append(f"- {file_path}:{line_num}")
 
             parts.extend(
