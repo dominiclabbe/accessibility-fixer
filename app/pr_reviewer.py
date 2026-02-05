@@ -227,8 +227,10 @@ class PRReviewer:
             parts.extend([
                 "",
                 "**Resolution Validation Task:**",
-                "- If any discussed issue STILL EXISTS in the current diff, report it again with context",
-                "- If someone claimed to fix it but didn't, call it out: 'Previously marked resolved but issue persists'",
+                "- If any discussed issue STILL EXISTS in the current diff, report it again with "
+                "context",
+                "- If someone claimed to fix it but didn't, call it out: 'Previously marked "
+                "resolved but issue persists'",
                 "- Be respectful but firm about accessibility requirements",
                 "",
             ])
@@ -236,12 +238,15 @@ class PRReviewer:
         parts.extend([
             "# Task",
             "Review ONLY the changed code in this diff for accessibility issues.",
-            "Focus on labels/hints/roles, interactive elements, images/icons alt text, form inputs, touch targets, Dynamic Type/font scaling, semantics, and contrast.",
+            "Focus on labels/hints/roles, interactive elements, images/icons alt text, form "
+            "inputs, touch targets, Dynamic Type/font scaling, semantics, and contrast.",
             "",
             "# CRITICAL: Issue Consolidation",
             "BEFORE reporting issues, consolidate similar/related issues that are close together:",
-            "- If multiple UI elements within 5 lines have the SAME problem (e.g., all missing labels), report ONE issue that mentions all affected elements",
-            "- Example: Instead of 2 separate comments for 'Button on line 15 missing label' and 'Button on line 19 missing label',",
+            "- If multiple UI elements within 5 lines have the SAME problem (e.g., all missing "
+            "labels), report ONE issue that mentions all affected elements",
+            "- Example: Instead of 2 separate comments for 'Button on line 15 missing label' "
+            "and 'Button on line 19 missing label',",
             "  Report ONE: 'Multiple buttons missing labels (lines 15, 19)'",
             "- Choose the FIRST line number as the location when consolidating",
             "- Only consolidate issues that are IDENTICAL in nature (same WCAG SC, same fix)",
@@ -288,14 +293,18 @@ class PRReviewer:
             "Return ONLY a valid JSON array. No markdown. No prose. No code fences.",
             "If no issues found, return: []",
             "",
-            "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
-            'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
+            "Each issue must have these keys (all values MUST be strings, except line which "
+            "must be a number):",
+            'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, '
+            'description, impact, current_code, suggested_fix, resources.',
             "",
             "OPTIONAL: You may include an 'anchor' object to improve inline comment placement:",
             '- anchor: {"anchor_text": "Slider(", "anchor_preference": "call"}',
-            "- anchor_text: short exact code snippet to search for (e.g., 'Slider(', '.clickable', 'TextField(')",
+            "- anchor_text: short exact code snippet to search for (e.g., 'Slider(', "
+            "'.clickable', 'TextField(')",
             '- anchor_preference: optional hint like "call", "modifier", "declaration"',
-            "- If provided, the comment will be anchored to the line containing anchor_text (closest to your proposed line)",
+            "- If provided, the comment will be anchored to the line containing anchor_text "
+            "(closest to your proposed line)",
             "- If omitted, the system will try to infer the anchor from title/suggested_fix",
             "",
             "Rules:",
@@ -304,14 +313,20 @@ class PRReviewer:
 
         # Add rule about existing comments if any exist
         if existing_comments:
-            parts.append("- Do NOT report issues at locations that already have comments (or within 5 lines of them).")
+            parts.append("- Do NOT report issues at locations that already have comments "
+                         "(or within 5 lines of them).")
 
         parts.extend([
-            "- CONSOLIDATE identical issues within 5 lines into ONE comment mentioning all affected lines.",
-            "- The 'line' field MUST be the EXACT line number in the NEW file where the issue occurs (not a guess or range).",
-            "- Count carefully from the '@@ ... +START ...' marker to get the correct line number.",
-            "- Point to the specific line with the problem (e.g., the line with contentDescription=null, not the function declaration).",
-            "- If you want more precise anchor placement, include the 'anchor' object with 'anchor_text'.",
+            "- CONSOLIDATE identical issues within 5 lines into ONE comment mentioning all "
+            "affected lines.",
+            "- The 'line' field MUST be the EXACT line number in the NEW file where the "
+            "issue occurs (not a guess or range).",
+            "- Count carefully from the '@@ ... +START ...' marker to get the correct line "
+            "number.",
+            "- Point to the specific line with the problem (e.g., the line with "
+            "contentDescription=null, not the function declaration).",
+            "- If you want more precise anchor placement, include the 'anchor' object with "
+            "'anchor_text'.",
             "- wcag_sc MUST be a single string. If multiple SC apply, join with '; '.",
             f"- current_code and suggested_fix must be short snippets (max {self.max_snippet_lines} lines each).",
             "- resources MUST be an array of strings (or empty array []).",
@@ -476,27 +491,27 @@ class PRReviewer:
         # Normalize components
         file_path = str(issue.get("file", "")).strip()
         line = issue.get("line", 0)
-        
+
         # Normalize line to nearest 5 to catch near-duplicates
         # (e.g., line 42 and 44 would both map to 40)
         line_bucket = (line // 5) * 5
-        
+
         # Normalize WCAG SC (remove spaces, lowercase, take first if multiple)
         wcag_sc = str(issue.get("wcag_sc", "")).strip().lower()
         if ";" in wcag_sc:
             wcag_sc = wcag_sc.split(";")[0].strip()
         wcag_sc = wcag_sc.replace(" ", "")
-        
+
         # Normalize title (lowercase, remove extra whitespace)
         title = str(issue.get("title", "")).strip().lower()
         title = " ".join(title.split())  # Normalize whitespace
-        
+
         # Truncate title to first 50 chars for fingerprint
         title_key = title[:50]
-        
+
         # Build fingerprint
         fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
-        
+
         # Hash for consistent length
         return hashlib.md5(fingerprint_str.encode()).hexdigest()
 

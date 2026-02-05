@@ -6,7 +6,7 @@ Handles per-file diff filtering and commentable line extraction.
 """
 
 import re
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional
 
 
 class DiffParser:
@@ -69,7 +69,6 @@ class DiffParser:
         if not file_paths:
             return ""
 
-        file_set = set(file_paths)
         parsed = DiffParser.parse_diff(full_diff)
 
         # Collect diffs for requested files
@@ -274,7 +273,7 @@ class DiffParser:
         """
         title = issue.get('title', '').lower()
         suggested_fix = issue.get('suggested_fix', '')
-        
+
         # Common Compose component patterns
         component_patterns = [
             ('slider', 'Slider('),
@@ -289,12 +288,12 @@ class DiffParser:
             ('floatingactionbutton', 'FloatingActionButton('),
             ('fab', 'FloatingActionButton('),
         ]
-        
+
         # Check title for component mentions
         for keyword, anchor in component_patterns:
             if keyword in title:
                 return anchor
-        
+
         # Check for clickable modifier
         if 'clickable' in title or 'click' in title:
             # Check suggested_fix for specific pattern
@@ -302,12 +301,12 @@ class DiffParser:
                 return '.clickable'
             elif 'clickable(' in suggested_fix:
                 return 'clickable('
-        
+
         # Check for modifier chains in suggested_fix
         if 'Modifier.' in suggested_fix or '.semantics' in suggested_fix:
             if '.semantics' in suggested_fix:
                 return '.semantics'
-        
+
         return None
 
     @staticmethod
@@ -337,29 +336,29 @@ class DiffParser:
         """
         if not commentable_lines:
             return None
-        
+
         original_line = issue.get('line', 0)
         if original_line <= 0:
             return None
-        
+
         # Get anchor information
         anchor = issue.get('anchor', {})
         anchor_text = anchor.get('anchor_text') if isinstance(anchor, dict) else None
-        
+
         # Infer anchor text if not provided
         if not anchor_text:
             anchor_text = DiffParser.infer_anchor_text(issue)
-        
+
         # If we have anchor text, try to find matching lines
         if anchor_text:
             matches = []
-            
+
             # First try case-sensitive match
             for line_num in commentable_lines:
                 line_text = line_texts.get(line_num, '')
                 if anchor_text in line_text:
                     matches.append(line_num)
-            
+
             # If no case-sensitive matches, try case-insensitive
             if not matches:
                 anchor_text_lower = anchor_text.lower()
@@ -367,13 +366,13 @@ class DiffParser:
                     line_text = line_texts.get(line_num, '')
                     if anchor_text_lower in line_text.lower():
                         matches.append(line_num)
-            
+
             # If we have matches, pick the one closest to original line
             if matches:
                 # Find closest match to original line
                 best_match = min(matches, key=lambda ln: abs(ln - original_line))
                 return best_match
-        
+
         # Fall back to nearest commentable line
         return DiffParser.find_nearest_commentable_line(
             original_line, commentable_lines, max_distance
@@ -481,7 +480,7 @@ def validate_issues_in_batch(
         if file_path in commentable_lines:
             file_commentable = commentable_lines[file_path]
             adjusted_line = None
-            
+
             # First, try anchor-based resolution if line_texts available
             # This is done EVEN if the original line is commentable, to get more precise placement
             if line_texts and file_path in line_texts:
@@ -495,7 +494,7 @@ def validate_issues_in_batch(
                 elif adjusted_line == line:
                     # Anchor resolution confirmed the original line is correct
                     pass
-            
+
             # If no anchor resolution or it failed, check if we need adjustment
             if not adjusted_line:
                 if line not in file_commentable:
