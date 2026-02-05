@@ -315,5 +315,136 @@ class TestIsNoIssuesPlaceholder:
         assert is_no_issues_placeholder(issue) is False
 
 
+class TestDebugWebReviewLogging:
+    """Tests for DEBUG_WEB_REVIEW logging functionality."""
+
+    def test_validate_issues_with_debug_web_review_env(self, monkeypatch, capsys):
+        """Test that DEBUG_WEB_REVIEW logs drop reasons for web files."""
+        # Enable DEBUG_WEB_REVIEW
+        monkeypatch.setenv("DEBUG_WEB_REVIEW", "1")
+
+        # Sample diff for web file
+        diff = """diff --git a/web/components/Button.tsx b/web/components/Button.tsx
+index 1234567..abcdefg 100644
+--- a/web/components/Button.tsx
++++ b/web/components/Button.tsx
+@@ -1,3 +1,5 @@
++import React from 'react';
++
+ function Button() {
+   return <button>Click</button>;
+ }
+"""
+
+        batch_files = ["web/components/Button.tsx"]
+        commentable = {"web/components/Button.tsx": [1, 2, 3, 4, 5]}
+
+        # Issue for a file not in batch (web file)
+        issues = [
+            {
+                "file": "web/components/NotInBatch.tsx",
+                "line": 10,
+                "title": "Missing aria-label",
+                "wcag_sc": "4.1.2",
+            }
+        ]
+
+        validated = validate_issues_in_batch(issues, batch_files, commentable, diff)
+
+        # Should drop the issue
+        assert len(validated) == 0
+
+        # Check that logs were captured (via print, not logger in tests)
+        captured = capsys.readouterr()
+        assert "Dropping issue" in captured.out
+        assert "web/components/NotInBatch.tsx" in captured.out
+
+    def test_validate_issues_without_debug_web_review(self, monkeypatch, capsys):
+        """Test that without DEBUG_WEB_REVIEW, detailed logs are not shown."""
+        # Ensure DEBUG_WEB_REVIEW is off
+        monkeypatch.setenv("DEBUG_WEB_REVIEW", "0")
+
+        diff = """diff --git a/web/test.tsx b/web/test.tsx
+index 1234567..abcdefg 100644
+--- a/web/test.tsx
++++ b/web/test.tsx
+@@ -1,3 +1,4 @@
++// New line
+ export default Test;
+"""
+
+        batch_files = ["web/test.tsx"]
+        commentable = {"web/test.tsx": [1, 2]}
+
+        # Issue for non-existent file
+        issues = [
+            {"file": "web/other.tsx", "line": 10, "title": "Test", "wcag_sc": "1.1.1"}
+        ]
+
+        validated = validate_issues_in_batch(issues, batch_files, commentable, diff)
+
+        # Should drop the issue
+        assert len(validated) == 0
+
+        # Basic warning should still appear
+        captured = capsys.readouterr()
+        assert "Dropping issue" in captured.out
+
+    def test_web_file_detection(self):
+        """Test that _is_web_file correctly identifies web files."""
+        from app.diff_parser import _is_web_file
+
+        # Test web directory
+        assert _is_web_file("web/components/Button.tsx") is True
+        assert _is_web_file("web/styles/main.css") is True
+
+        # Test web extensions
+        assert _is_web_file("src/components/Button.tsx") is True
+        assert _is_web_file("src/components/Button.jsx") is True
+        assert _is_web_file("app/script.js") is True
+        assert _is_web_file("styles/main.css") is True
+        assert _is_web_file("index.html") is True
+
+        # Test non-web files
+        assert _is_web_file("app/main.py") is False
+        assert _is_web_file("src/Main.swift") is False
+        assert _is_web_file("app/MainActivity.kt") is False
+
+    def test_drop_reason_codes(self, monkeypatch, capsys):
+        """Test that drop reason codes are correctly generated."""
+        monkeypatch.setenv("DEBUG_WEB_REVIEW", "1")
+
+        diff = """diff --git a/web/test.tsx b/web/test.tsx
+index 1234567..abcdefg 100644
+--- a/web/test.tsx
++++ b/web/test.tsx
+@@ -10,3 +10,4 @@ function Test() {
+   return <div>Test</div>;
++  // New line
+ }
+"""
+
+        batch_files = ["web/test.tsx"]
+        commentable = {"web/test.tsx": [10, 11, 12, 13]}
+
+        # Test various drop reasons
+        issues = [
+            # Invalid line number
+            {"file": "web/test.tsx", "line": 0, "title": "Invalid line", "wcag_sc": "1.1.1"},
+            # File not in batch
+            {"file": "web/other.tsx", "line": 5, "title": "Not in batch", "wcag_sc": "1.1.1"},
+        ]
+
+        validated = validate_issues_in_batch(issues, batch_files, commentable, diff)
+
+        # Both should be dropped
+        assert len(validated) == 0
+
+        # Check output contains reason codes
+        captured = capsys.readouterr()
+        assert "invalid_line_number" in captured.out
+        assert "file_not_in_batch" in captured.out
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

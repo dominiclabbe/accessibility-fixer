@@ -9,6 +9,7 @@ import os
 import json
 import time
 import hashlib
+import logging
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
@@ -21,7 +22,10 @@ from app.diff_parser import (
     DiffParser,
     validate_issues_in_batch,
     is_no_issues_placeholder,
+    _is_web_file,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PRReviewer:
@@ -125,27 +129,27 @@ class PRReviewer:
                     if f.startswith("web/") or any(f.endswith(ext) for ext in web_extensions)
                 ]
 
-                print(f"[DEBUG_WEB_REVIEW] Batch {batch_idx + 1}/{len(batches)}:")
-                print(f"  Files in batch: {file_batch}")
-                print(f"  Web files in batch: {web_files_in_batch}")
-                print(f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})")
+                logger.info(f"[DEBUG_WEB_REVIEW] Batch {batch_idx + 1}/{len(batches)}:")
+                logger.info(f"  Files in batch: {file_batch}")
+                logger.info(f"  Web files in batch: {web_files_in_batch}")
+                logger.info(f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})")
 
                 for file_path in file_batch:
                     file_commentable = commentable_lines.get(file_path, [])
                     if isinstance(file_commentable, dict):
                         file_commentable = list(file_commentable.keys())
 
-                    print(f"  Commentable lines for {file_path}:")
-                    print(f"    Type: {type(file_commentable).__name__}")
-                    print(f"    Total commentable lines: {len(file_commentable)}")
+                    logger.info(f"  Commentable lines for {file_path}:")
+                    logger.info(f"    Type: {type(file_commentable).__name__}")
+                    logger.info(f"    Total commentable lines: {len(file_commentable)}")
                     if file_commentable:
                         try:
-                            print(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
+                            logger.info(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
                         except TypeError:
                             preview = ", ".join(map(str, file_commentable[:10]))
-                            print(f"    Line range: n/a (non-numeric lines). Preview: [{preview}]")
+                            logger.info(f"    Line range: n/a (non-numeric lines). Preview: [{preview}]")
                     else:
-                        print("    Line range: n/a (no commentable lines)")
+                        logger.info("    Line range: n/a (no commentable lines)")
 
             # Create prompt
             prompt = self._create_review_prompt(
@@ -193,14 +197,14 @@ class PRReviewer:
                     if is_web_issue:
                         web_issue_count += 1
 
-                print(f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):")
-                print(f"  Total raw issues: {len(raw_issues)}")
-                print(f"  Non-dict items in raw_issues: {non_dict_count}")
-                print("  Issues by file (as returned by model):")
+                logger.info(f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):")
+                logger.info(f"  Total raw issues: {len(raw_issues)}")
+                logger.info(f"  Non-dict items in raw_issues: {non_dict_count}")
+                logger.info("  Issues by file (as returned by model):")
                 for fp, count in issues_by_file.items():
                     tag = "WEB" if (fp.startswith("web/") or any(fp.endswith(ext) for ext in web_extensions)) else "NON-WEB"
-                    print(f"    - {fp} ({tag}): {count}")
-                print(f"  Web issues (robust count): {web_issue_count}/{len(raw_issues)}")
+                    logger.info(f"    - {fp} ({tag}): {count}")
+                logger.info(f"  Web issues (robust count): {web_issue_count}/{len(raw_issues)}")
 
             # Filter out "no issues" placeholders (guard for non-dict)
             filtered_raw_issues: List[Dict] = []
@@ -225,6 +229,24 @@ class PRReviewer:
                 commentable_lines,
                 batch_diff,
             )
+
+            # DEBUG_WEB_REVIEW: Log summary after validation
+            if debug_web_review:
+                web_normalized = sum(
+                    1 for issue in normalized_issues
+                    if _is_web_file(issue.get('file', ''))
+                )
+                web_validated = sum(
+                    1 for issue in validated_issues
+                    if _is_web_file(issue.get('file', ''))
+                )
+                non_web_normalized = len(normalized_issues) - web_normalized
+                non_web_validated = len(validated_issues) - web_validated
+
+                logger.info(f"[DEBUG_WEB_REVIEW] Validation summary (batch {batch_idx + 1}):")
+                logger.info(f"  Normalized issues: {len(normalized_issues)} (web: {web_normalized}, non-web: {non_web_normalized})")
+                logger.info(f"  Validated issues: {len(validated_issues)} (web: {web_validated}, non-web: {non_web_validated})")
+                logger.info(f"  Dropped: {len(normalized_issues) - len(validated_issues)} (web: {web_normalized - web_validated}, non-web: {non_web_normalized - non_web_validated})")
 
             all_issues.extend(validated_issues)
 
@@ -593,11 +615,11 @@ class PRReviewer:
 
         # DEBUG_WEB_REVIEW: Log dedupe drops
         if debug_web_review and dedupe_drops:
-            print("\n[DEBUG_WEB_REVIEW] Deduplication drops:")
+            logger.info("\n[DEBUG_WEB_REVIEW] Deduplication drops:")
             for drop in dedupe_drops:
-                print(f"  {drop['file']}:{drop['line']} - {drop['reason']}")
-                print(f"    Title: {drop['title']}")
-                print(f"    Fingerprint: {drop['fingerprint']}")
+                logger.info(f"  {drop['file']}:{drop['line']} - {drop['reason']}")
+                logger.info(f"    Title: {drop['title']}")
+                logger.info(f"    Fingerprint: {drop['fingerprint']}")
 
         return out
 
