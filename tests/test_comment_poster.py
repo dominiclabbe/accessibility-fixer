@@ -25,10 +25,7 @@ class TestGetAppVersion:
 
     def test_version_from_git(self):
         """Test git fallback when env var not set."""
-        with patch.dict(os.environ, {}, clear=False):
-            # Remove env var if set
-            os.environ.pop("ACCESSIBILITY_FIXER_VERSION", None)
-            
+        with patch.dict(os.environ, {}, clear=True):
             with patch("subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(
                     returncode=0,
@@ -39,9 +36,7 @@ class TestGetAppVersion:
 
     def test_version_unknown_fallback(self):
         """Test fallback to 'unknown' when git fails."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("ACCESSIBILITY_FIXER_VERSION", None)
-            
+        with patch.dict(os.environ, {}, clear=True):
             with patch("subprocess.run") as mock_run:
                 mock_run.side_effect = Exception("Git not found")
                 version = get_app_version()
@@ -87,8 +82,7 @@ class TestGetDebugFooter:
     def test_footer_without_sarif(self):
         """Test footer doesn't include SARIF when disabled."""
         with patch("app.comment_poster.get_app_version", return_value="abc123"):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("OUTPUT_SARIF", None)
+            with patch.dict(os.environ, {}, clear=True):
                 config = {"model": "gpt-5.2"}
                 footer = get_debug_footer(config)
                 assert "sarif=enabled" not in footer
@@ -99,9 +93,7 @@ class TestCommentPosterDebugFooter:
 
     def test_review_summary_without_debug_stamp(self):
         """Test that review summary doesn't include debug footer by default."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DEBUG_REVIEW_STAMP", None)
-            
+        with patch.dict(os.environ, {}, clear=True):
             poster = CommentPoster()
             summary = poster._format_review_summary({"Critical": 2, "High": 1})
             

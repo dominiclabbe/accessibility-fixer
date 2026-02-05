@@ -29,12 +29,15 @@ def get_app_version() -> str:
     
     # Try git command
     try:
+        # Get repository root (two levels up from this file)
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             timeout=2,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            cwd=repo_root,
         )
         if result.returncode == 0:
             return result.stdout.strip()
