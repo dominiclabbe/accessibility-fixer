@@ -490,12 +490,6 @@ class PRReviewer:
         # Hash for consistent length
         return hashlib.md5(fingerprint_str.encode()).hexdigest()
 
-            if location_key not in seen:
-                seen.add(location_key)
-                out.append(issue)
-
-        return out
-
     @staticmethod
     def _clamp_lines(text: str, max_lines: int) -> str:
         """Clamp text to max lines."""
