@@ -43,7 +43,18 @@ PORT = int(os.getenv("PORT", "8080"))
 github_auth = create_auth_from_env()
 pr_reviewer = create_reviewer_from_env()
 guide_loader = GuideLoader()
-comment_poster = CommentPoster()
+
+# Create reviewer config dict for debug footer
+reviewer_config = None
+if pr_reviewer:
+    reviewer_config = {
+        "model": pr_reviewer.model,
+        "base_url": os.getenv("SCOUT_BASE_URL", ""),
+        "files_per_batch": pr_reviewer.files_per_batch,
+        "max_diff_chars": pr_reviewer.max_diff_chars,
+    }
+
+comment_poster = CommentPoster(reviewer_config=reviewer_config)
 
 
 def filter_reviewable_files(files: list) -> list:
