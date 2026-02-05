@@ -137,8 +137,10 @@ class PRReviewer:
                     print(f"  Commentable lines for {file_path}:")
                     print(f"    Total commentable lines: {len(file_commentable)}")
                     if file_commentable:
-                        print(f"    Line range: {min(file_commentable.keys())} - {max(file_commentable.keys())}")
-
+                        print(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
+                    else:
+                        print("    Line range: n/a (no commentable lines)")
+    
             # Create prompt
             prompt = self._create_review_prompt(
                 batch_diff,
