@@ -1,5 +1,69 @@
 # Changelog - Accessibility Audit Framework
 
+## 2026-02-05 - Improved Inline Comment Anchoring
+
+### ✅ More Precise PR Comment Placement
+**Change:** Implemented anchor-based line resolution to place inline comments on the most relevant lines
+**Issue:** Comments were being placed at suboptimal lines within the correct hunk (e.g., slider comment at line 379 but should be near `Slider(` call)
+
+**Why This Matters:**
+- Makes PR reviews more actionable and easier to understand
+- Reduces confusion about which code the comment refers to
+- Improves developer experience when addressing accessibility issues
+- Ensures comments appear exactly where the issue exists
+
+**How It Works:**
+
+1. **Anchor Text Inference:**
+   - System automatically infers anchor text from issue title and suggested_fix
+   - Supports common patterns: `Slider(`, `Switch(`, `TextField(`, `Button(`, `.clickable`, etc.
+   - Model can optionally provide explicit anchor via `anchor` object
+
+2. **Deterministic Resolution:**
+   - Searches for commentable lines containing the anchor text
+   - Picks the closest match to the model's proposed line
+   - Falls back to nearest commentable line if no anchor match
+
+3. **Backward Compatible:**
+   - Works with or without anchor information
+   - Maintains existing behavior when anchor data not available
+
+**Example:**
+
+Before:
+```
+Line 379: Text("Volume Settings")  ← Comment placed here (wrong)
+Line 380:
+Line 381: Slider(                  ← Issue actually here
+```
+
+After:
+```
+Line 379: Text("Volume Settings")
+Line 380:
+Line 381: Slider(                  ← Comment now placed here ✓
+```
+
+**Technical Details:**
+
+- New method: `DiffParser.extract_line_texts()` - Maps line numbers to text content
+- New method: `DiffParser.infer_anchor_text()` - Infers anchor from issue data
+- New method: `DiffParser.resolve_anchor_line()` - Finds best anchor line
+- Updated: `validate_issues_in_batch()` - Uses anchor resolution when available
+- Added 19 comprehensive tests for all anchor patterns
+
+**Supported Component Patterns:**
+- Compose: `Slider(`, `Switch(`, `TextField(`, `Button(`, `Image(`, `Icon(`, `Checkbox(`, `.clickable`, `.semantics`
+- Works with case-insensitive matching as fallback
+- Picks closest match when multiple instances exist
+
+**Testing:**
+- 52 tests passing (19 new anchor-related tests)
+- End-to-end validation with realistic Compose diffs
+- Backward compatibility verified
+
+---
+
 ## 2025-10-30 - Font Scaling Support (Critical)
 
 ### ✅ Text Must Resize According to Platform Settings
