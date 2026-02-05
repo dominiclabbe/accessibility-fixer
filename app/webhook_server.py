@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from typing import Dict
 from flask import Flask, request, jsonify
 import requests
 from dotenv import load_dotenv
@@ -451,33 +452,33 @@ def handle_pull_request(payload: dict):
         )
 
         def is_near_existing_comment(
-            file_path: str, 
-            line: int, 
+            file_path: str,
+            line: int,
             issue: Dict = None,
             range_threshold: int = 5
         ) -> tuple:
             """
             Check if a location is near any existing comment AND if it's the same issue.
-            
-            This refined logic prevents suppressing corrected anchors while still avoiding
-            true duplicates. It checks:
-            1. Same file AND same issue identity (title match or anchor signature match)
+
+            This refined logic prevents suppressing corrected anchors while still
+            avoiding true duplicates. It checks:
+            1. Same file AND same issue identity (title match or anchor signature)
             2. Proximity alone is NOT sufficient to suppress
-            
+
             Supports multiple entry shapes in posted_locations:
             - 2-tuples: (file, line)
-            - 3+ tuples: (file, line, body_snippet, ...) - body_snippet used for title matching
+            - 3+ tuples: (file, line, body_snippet, ...) - body_snippet used
             - dicts: {'file': ..., 'line': ...} or {'path': ..., 'line': ...}
             - Malformed entries are skipped safely
-            
+
             Args:
                 file_path: File path of the issue to check
                 line: Line number of the issue to check
-                issue: Issue dict with title, anchor_text, etc. (optional for backward compat)
+                issue: Issue dict with title, anchor_text, etc. (optional)
                 range_threshold: Line distance threshold (default: 5)
-                
+
             Returns:
-                Tuple of (should_skip: bool, skip_reason: str, matched_entry: dict or None)
+                Tuple of (should_skip: bool, skip_reason: str, matched_entry or None)
             """
             # Extract issue identity for matching
             issue_title = ""
@@ -486,17 +487,18 @@ def handle_pull_request(payload: dict):
                 issue_title = str(issue.get("title", "")).strip()[:50].lower()
                 # Get anchor signature
                 if issue.get("_anchor_matched_text"):
-                    issue_anchor = str(issue.get("_anchor_matched_text", "")).strip().lower()
+                    anchor_src = issue.get("_anchor_matched_text", "")
+                    issue_anchor = str(anchor_src).strip().lower()
                 elif issue.get("anchor_text"):
                     issue_anchor = str(issue.get("anchor_text", "")).strip().lower()
-            
+
             for entry in posted_locations:
                 try:
                     # Parse entry based on type
                     existing_file = None
                     existing_line = None
                     existing_snippet = ""
-                    
+
                     # Handle dictionary entries
                     if isinstance(entry, dict):
                         existing_file = entry.get("file") or entry.get("path")
@@ -518,23 +520,23 @@ def handle_pull_request(payload: dict):
                     # Check if same file
                     if existing_file != file_path:
                         continue
-                    
+
                     # Calculate distance
                     distance = abs(existing_line - line)
-                    
+
                     # Check if within range
                     if distance > range_threshold:
                         continue
-                    
+
                     # Within range - now check if it's the SAME issue
                     is_same_issue = False
                     match_reason = ""
-                    
+
                     # If we have issue metadata, check for identity match
                     if issue and (issue_title or issue_anchor):
                         # Normalize existing snippet for comparison
                         existing_title = existing_snippet.strip()[:50].lower()
-                        
+
                         # Check title match
                         if issue_title and existing_title:
                             # Fuzzy match: check if titles are similar enough
@@ -542,38 +544,47 @@ def handle_pull_request(payload: dict):
                             if issue_title == existing_title:
                                 is_same_issue = True
                                 match_reason = "exact title match"
-                            elif len(issue_title) >= 30 and len(existing_title) >= 30:
+                            elif (len(issue_title) >= 30 and
+                                  len(existing_title) >= 30):
                                 # For longer titles, check prefix match
-                                min_len = min(len(issue_title), len(existing_title))
+                                min_len = min(len(issue_title),
+                                              len(existing_title))
                                 threshold = int(min_len * 0.8)
-                                if issue_title[:threshold] == existing_title[:threshold]:
+                                if issue_title[:threshold] == \
+                                   existing_title[:threshold]:
                                     is_same_issue = True
                                     match_reason = "fuzzy title match"
-                        
+
                         # Check anchor match (if title didn't match)
-                        if not is_same_issue and issue_anchor and existing_snippet:
+                        if not is_same_issue and issue_anchor and \
+                           existing_snippet:
                             # Check if anchor text appears in existing snippet
                             # Normalize both for comparison
-                            anchor_normalized = "".join(issue_anchor.split()).lower()[:40]
-                            snippet_normalized = "".join(existing_snippet.split()).lower()
-                            
+                            anchor_norm = "".join(issue_anchor.split()).lower()
+                            anchor_normalized = anchor_norm[:40]
+                            snippet_norm = "".join(existing_snippet.split())
+                            snippet_normalized = snippet_norm.lower()
+
                             # Try substring match
-                            if anchor_normalized and len(anchor_normalized) >= 3:
+                            if (anchor_normalized and
+                                len(anchor_normalized) >= 3):
                                 if anchor_normalized in snippet_normalized:
                                     is_same_issue = True
                                     match_reason = "anchor signature match"
-                            
-                            # Also try matching just the keyword (before parenthesis or special chars)
+
+                            # Try matching keyword (before parenthesis/special)
                             if not is_same_issue and anchor_normalized:
-                                # Extract keyword: take alphanumeric part before special chars
+                                # Extract keyword: alphanumeric before special
                                 import re
-                                keyword_match = re.match(r'^([a-z0-9_]+)', anchor_normalized)
+                                keyword_match = re.match(r'^([a-z0-9_]+)',
+                                                         anchor_normalized)
                                 if keyword_match:
                                     keyword = keyword_match.group(1)
-                                    if len(keyword) >= 4 and keyword in snippet_normalized:
+                                    if (len(keyword) >= 4 and
+                                       keyword in snippet_normalized):
                                         is_same_issue = True
                                         match_reason = "anchor signature match"
-                    
+
                     # If same issue detected, skip it
                     if is_same_issue:
                         matched_entry = {
@@ -583,18 +594,19 @@ def handle_pull_request(payload: dict):
                             "snippet": existing_snippet[:100],
                         }
                         return (True, match_reason, matched_entry)
-                    
-                    # Within range but NOT same issue - this is likely a corrected anchor
-                    # or different issue at nearby location. Do NOT suppress.
+
+                    # Within range but NOT same issue - different/corrected
+                    # anchor or different issue. Do NOT suppress.
                     logger.debug(
-                        f"Location {file_path}:{line} is near {existing_file}:{existing_line} "
-                        f"(distance={distance}) but appears to be a different issue. Not suppressing."
+                        f"Location {file_path}:{line} is near "
+                        f"{existing_file}:{existing_line} (distance={distance}) "
+                        f"but appears to be a different issue. Not suppressing."
                     )
-                    
+
                 except (TypeError, ValueError, IndexError, AttributeError):
                     # Skip malformed entries safely
                     continue
-            
+
             # No matching existing comment found
             return (False, "", None)
 
@@ -620,7 +632,7 @@ def handle_pull_request(payload: dict):
                 should_skip, skip_reason, matched_entry = is_near_existing_comment(
                     file_path, line, issue
                 )
-                
+
                 if should_skip:
                     # Log detailed skip information
                     matched_info = ""
@@ -630,13 +642,16 @@ def handle_pull_request(payload: dict):
                             f"(distance={matched_entry['distance']} lines)"
                         )
                         if matched_entry.get('snippet'):
-                            matched_info += f" snippet='{matched_entry['snippet'][:50]}...'"
-                    
+                            snippet_preview = matched_entry['snippet'][:50]
+                            matched_info += f" snippet='{snippet_preview}...'"
+
                     logger.info(
-                        f"Skipping issue at {file_path}:{line} - Title: '{issue_title[:60]}' "
-                        f"| Proposed line: {line}"
-                        + (f" | Resolved line: {resolved_line}" if resolved_line else "")
-                        + f" | Reason: {skip_reason} with existing comment at {matched_info}"
+                        f"Skipping issue at {file_path}:{line} - "
+                        f"Title: '{issue_title[:60]}' | Proposed line: {line}"
+                        + (f" | Resolved line: {resolved_line}"
+                           if resolved_line else "")
+                        + f" | Reason: {skip_reason} with existing comment at "
+                        f"{matched_info}"
                     )
                     continue
 
