@@ -266,7 +266,48 @@ GITHUB_WEBHOOK_SECRET=your_webhook_secret
 # SARIF Output (optional)
 OUTPUT_SARIF=1
 SARIF_OUTPUT_PATH=accessibility-report.sarif
+
+# Debug Footer (optional)
+DEBUG_REVIEW_STAMP=1
+ACCESSIBILITY_FIXER_VERSION=v1.2.3  # Optional override for version
 ```
+
+### Debug Review Stamp
+
+The `DEBUG_REVIEW_STAMP` feature adds diagnostic information to PR review summary comments, helping users verify which app build/configuration produced a review.
+
+**Usage:**
+```bash
+# Enable debug stamp
+DEBUG_REVIEW_STAMP=1
+
+# Optional: Override version detection
+ACCESSIBILITY_FIXER_VERSION=v1.2.3
+```
+
+**What's included in the debug footer:**
+
+The footer is appended to the review summary comment (not inline comments) and includes:
+
+- **App version**: Git SHA (short) or custom version from `ACCESSIBILITY_FIXER_VERSION`
+  - Priority: env var → `git rev-parse --short HEAD` → "unknown"
+- **Model configuration**: Model name and provider domain
+- **Runtime settings**: `files_per_batch`, `max_diff_chars`
+- **Feature flags**: SARIF output status if enabled
+
+**Example footer:**
+```
+---
+_debug: accessibility-fixer@abc1234 model=gpt-5.2 provider=scout.ai files_per_batch=1 max_diff_chars=180000 sarif=enabled_
+```
+
+**When to use:**
+- During development and testing to confirm configuration
+- When debugging unexpected review behavior
+- For audit trails in production environments
+- When comparing reviews across different configurations
+
+**Note:** The footer is disabled by default and only appears when `DEBUG_REVIEW_STAMP` is explicitly enabled.
 
 ### File Filtering Rules
 

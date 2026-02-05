@@ -4,21 +4,104 @@ PR Comment Poster
 Posts inline review comments and commit statuses to GitHub PRs.
 """
 
+import os
+import subprocess
 import requests
 from typing import List, Dict, Optional
+
+
+def get_app_version() -> str:
+    """
+    Get application version/git SHA for debug footer.
+    
+    Priority:
+    1. ACCESSIBILITY_FIXER_VERSION env var
+    2. git rev-parse --short HEAD
+    3. "unknown" fallback
+    
+    Returns:
+        Short git SHA or version string
+    """
+    # Try env var override first
+    env_version = os.getenv("ACCESSIBILITY_FIXER_VERSION")
+    if env_version:
+        return env_version
+    
+    # Try git command
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    
+    return "unknown"
+
+
+def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
+    """
+    Generate debug footer for review summary.
+    
+    Args:
+        reviewer_config: Optional dict with reviewer configuration
+                        (model, files_per_batch, max_diff_chars, etc.)
+    
+    Returns:
+        Debug footer string in format:
+        ---
+        _debug: accessibility-fixer@<sha> model=<model> files_per_batch=<n> ..._
+    """
+    version = get_app_version()
+    
+    parts = [f"accessibility-fixer@{version}"]
+    
+    if reviewer_config:
+        # Add model info
+        model = reviewer_config.get("model", os.getenv("SCOUT_MODEL", "unknown"))
+        parts.append(f"model={model}")
+        
+        # Add base URL/provider if available
+        base_url = reviewer_config.get("base_url", os.getenv("SCOUT_BASE_URL", ""))
+        if base_url:
+            # Extract just the domain for brevity
+            if "://" in base_url:
+                domain = base_url.split("://")[1].split("/")[0]
+                parts.append(f"provider={domain}")
+        
+        # Add key runtime settings
+        files_per_batch = reviewer_config.get("files_per_batch", os.getenv("SCOUT_FILES_PER_BATCH", "1"))
+        parts.append(f"files_per_batch={files_per_batch}")
+        
+        max_diff_chars = reviewer_config.get("max_diff_chars", os.getenv("SCOUT_MAX_DIFF_CHARS", "180000"))
+        parts.append(f"max_diff_chars={max_diff_chars}")
+        
+        # Check if SARIF is enabled
+        sarif_enabled = os.getenv("OUTPUT_SARIF", "").lower() in ["1", "true", "yes"]
+        if sarif_enabled:
+            parts.append("sarif=enabled")
+    
+    return f"\n\n---\n_debug: {' '.join(parts)}_"
 
 
 class CommentPoster:
     """Posts accessibility issues as PR review comments."""
 
-    def __init__(self, github_api_url: str = "https://api.github.com"):
+    def __init__(self, github_api_url: str = "https://api.github.com", reviewer_config: Optional[Dict] = None):
         """
         Initialize comment poster.
 
         Args:
             github_api_url: GitHub API base URL
+            reviewer_config: Optional reviewer configuration for debug footer
         """
         self.github_api_url = github_api_url
+        self.reviewer_config = reviewer_config
 
     def post_review_comments(
         self,
@@ -366,6 +449,11 @@ class CommentPoster:
         parts.append("")
         parts.append("---")
         parts.append("🤖 Automated by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)")
+
+        # Add debug footer if enabled
+        if os.getenv("DEBUG_REVIEW_STAMP", "").lower() in ["1", "true", "yes"]:
+            debug_footer = get_debug_footer(self.reviewer_config)
+            parts.append(debug_footer)
 
         return "\n".join(parts)
 
