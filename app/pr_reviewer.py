@@ -90,7 +90,7 @@ class PRReviewer:
         # Split into batches if needed
         batches = list(self._chunk_list(changed_files, self.files_per_batch))
 
-        all_issues = []
+        all_issues: List[Dict] = []
         batch_size_for_posting = 5  # Post every 5 batches
 
         # DEBUG_WEB_REVIEW: Track web files in batches
@@ -102,9 +102,7 @@ class PRReviewer:
             web_extensions = set()
 
         for batch_idx, file_batch in enumerate(batches):
-            print(
-                f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
-            )
+            print(f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)...")
 
             # Get diff for this batch using proper diff parser
             batch_diff = DiffParser.filter_diff_for_files(pr_diff, file_batch)
@@ -115,32 +113,40 @@ class PRReviewer:
             # Truncate if too large
             original_diff_size = len(batch_diff)
             if len(batch_diff) > self.max_diff_chars:
-                batch_diff = (
-                    batch_diff[: self.max_diff_chars]
-                    + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
-                )
+                batch_diff = batch_diff[: self.max_diff_chars] + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
 
             # Extract commentable lines for validation
             commentable_lines = DiffParser.extract_commentable_lines(batch_diff)
 
             # DEBUG_WEB_REVIEW: Log batch composition and commentable lines
             if debug_web_review:
-                web_files_in_batch = [f for f in file_batch if any(f.endswith(ext) for ext in web_extensions)]
+                web_files_in_batch = [
+                    f for f in file_batch
+                    if f.startswith("web/") or any(f.endswith(ext) for ext in web_extensions)
+                ]
+
                 print(f"[DEBUG_WEB_REVIEW] Batch {batch_idx + 1}/{len(batches)}:")
                 print(f"  Files in batch: {file_batch}")
                 print(f"  Web files in batch: {web_files_in_batch}")
                 print(f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})")
-                
-                # Log commentable lines per file
+
                 for file_path in file_batch:
-                    file_commentable = commentable_lines.get(file_path, {})
+                    file_commentable = commentable_lines.get(file_path, [])
+                    if isinstance(file_commentable, dict):
+                        file_commentable = list(file_commentable.keys())
+
                     print(f"  Commentable lines for {file_path}:")
+                    print(f"    Type: {type(file_commentable).__name__}")
                     print(f"    Total commentable lines: {len(file_commentable)}")
                     if file_commentable:
-                        print(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
+                        try:
+                            print(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
+                        except TypeError:
+                            preview = ", ".join(map(str, file_commentable[:10]))
+                            print(f"    Line range: n/a (non-numeric lines). Preview: [{preview}]")
                     else:
                         print("    Line range: n/a (no commentable lines)")
-    
+
             # Create prompt
             prompt = self._create_review_prompt(
                 batch_diff,
@@ -154,77 +160,88 @@ class PRReviewer:
             # Call Scout AI
             raw_issues = self._review_with_scout(prompt)
 
-            # DEBUG_WEB_REVIEW: Log raw issues from LLM
+            # DEBUG_WEB_REVIEW: Log raw issues from LLM (robust)
             if debug_web_review:
+                from pathlib import Path as _Path
+
+                web_files_in_batch = [
+                    f for f in file_batch
+                    if f.startswith("web/") or any(f.endswith(ext) for ext in web_extensions)
+                ]
+                web_file_set = set(web_files_in_batch)
+                web_basenames = {_Path(p).name for p in web_files_in_batch}
+
+                issues_by_file: Dict[str, int] = {}
+                web_issue_count = 0
+                non_dict_count = 0
+
+                for issue in raw_issues:
+                    if not isinstance(issue, dict):
+                        non_dict_count += 1
+                        continue
+
+                    issue_file = str(issue.get("file", "unknown"))
+                    issues_by_file[issue_file] = issues_by_file.get(issue_file, 0) + 1
+
+                    issue_basename = _Path(issue_file).name
+                    is_web_issue = (
+                        issue_file.startswith("web/")
+                        or any(issue_file.endswith(ext) for ext in web_extensions)
+                        or issue_file in web_file_set
+                        or issue_basename in web_basenames
+                    )
+                    if is_web_issue:
+                        web_issue_count += 1
+
                 print(f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):")
                 print(f"  Total raw issues: {len(raw_issues)}")
-                
-                # Group by file
-                issues_by_file = {}
-                for issue in raw_issues:
-                    file_path = issue.get("file", "unknown")
-                    if file_path not in issues_by_file:
-                        issues_by_file[file_path] = []
-                    issues_by_file[file_path].append(issue)
-                
-                # Log grouped issues
-                for file_path, file_issues in issues_by_file.items():
-                    is_web = any(file_path.endswith(ext) for ext in web_extensions)
-                    print(f"  {file_path} ({'WEB' if is_web else 'NON-WEB'}): {len(file_issues)} issues")
-                    for idx, issue in enumerate(file_issues, 1):
-                        line = issue.get("line", "?")
-                        title = issue.get("title", "")[:60]
-                        print(f"    [{idx}] Line {line}: {title}")
-                
-                # Count web vs non-web issues
-                web_issue_count = sum(
-                    len(issues_by_file.get(f, []))
-                    for f in web_files_in_batch
-                )
-                total_issues = len(raw_issues)
-                print(f"  Web issues: {web_issue_count}/{total_issues}")
+                print(f"  Non-dict items in raw_issues: {non_dict_count}")
+                print("  Issues by file (as returned by model):")
+                for fp, count in issues_by_file.items():
+                    tag = "WEB" if (fp.startswith("web/") or any(fp.endswith(ext) for ext in web_extensions)) else "NON-WEB"
+                    print(f"    - {fp} ({tag}): {count}")
+                print(f"  Web issues (robust count): {web_issue_count}/{len(raw_issues)}")
 
-            # Filter out "no issues" placeholders
-            raw_issues = [
-                issue for issue in raw_issues if not is_no_issues_placeholder(issue)
-            ]
+            # Filter out "no issues" placeholders (guard for non-dict)
+            filtered_raw_issues: List[Dict] = []
+            for issue in raw_issues:
+                if not isinstance(issue, dict):
+                    continue
+                if is_no_issues_placeholder(issue):
+                    continue
+                filtered_raw_issues.append(issue)
 
             # Normalize issues
-            normalized_issues = []
-            for issue in raw_issues:
+            normalized_issues: List[Dict] = []
+            for issue in filtered_raw_issues:
                 normalized = self._normalize_issue(issue)
                 if normalized:
                     normalized_issues.append(normalized)
 
             # Validate issues are in batch and on commentable lines
-            # Pass batch_diff for semantic anchor resolution
             validated_issues = validate_issues_in_batch(
-                normalized_issues, file_batch, commentable_lines, batch_diff
+                normalized_issues,
+                file_batch,
+                commentable_lines,
+                batch_diff,
             )
 
-            # Add validated issues to results
             all_issues.extend(validated_issues)
 
             # Post comments progressively every N batches
-            if (
-                on_batch_complete
-                and len(all_issues) > 0
-                and (batch_idx + 1) % batch_size_for_posting == 0
-            ):
-                # Deduplicate current batch
+            if on_batch_complete and len(all_issues) > 0 and (batch_idx + 1) % batch_size_for_posting == 0:
                 deduped = self._dedupe_issues(all_issues)
                 if deduped:
                     on_batch_complete(deduped)
-                    all_issues = []  # Clear posted issues
+                    all_issues = []
 
         # Post any remaining issues
         if on_batch_complete and len(all_issues) > 0:
             deduped = self._dedupe_issues(all_issues)
             if deduped:
                 on_batch_complete(deduped)
-            return []  # Already posted
+            return []
 
-        # If no callback, return all issues (existing behavior)
         return self._dedupe_issues(all_issues)
 
     def _create_review_prompt(
