@@ -7,6 +7,7 @@ Handles per-file diff filtering and commentable line extraction.
 
 import os
 import re
+from difflib import get_close_matches
 from typing import Dict, List, Tuple, Optional, Set
 from pathlib import Path
 
@@ -268,6 +269,24 @@ class DiffParser:
         return ""
 
 
+def _find_closest_files(file_path: str, batch_files: List[str], n: int = 2) -> List[str]:
+    """
+    Find closest matching files based on filename similarity.
+    
+    Args:
+        file_path: The file to find matches for
+        batch_files: List of files to search within
+        n: Number of matches to return
+        
+    Returns:
+        List of closest matching file paths
+    """
+    file_basename = os.path.basename(file_path)
+    batch_basenames = {os.path.basename(f): f for f in batch_files}
+    close_matches = get_close_matches(file_basename, batch_basenames.keys(), n=n, cutoff=0.6)
+    return [batch_basenames[match] for match in close_matches if batch_basenames[match] != file_path]
+
+
 def validate_issues_in_batch(
     issues: List[Dict],
     batch_files: List[str],
@@ -324,11 +343,7 @@ def validate_issues_in_batch(
             print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
             if debug_web_review:
                 # Find closest matches based on filename similarity
-                from difflib import get_close_matches
-                file_basename = os.path.basename(file_path)
-                batch_basenames = {os.path.basename(f): f for f in batch_files}
-                close_matches = get_close_matches(file_basename, batch_basenames.keys(), n=3, cutoff=0.6)
-                closest_files = [batch_basenames[match] for match in close_matches] if close_matches else []
+                closest_files = _find_closest_files(file_path, batch_files, n=3)
                 
                 drop_reasons.append({
                     "file": file_path,
@@ -410,12 +425,8 @@ def validate_issues_in_batch(
                             print(f"  [RESULT] Dropping issue - {drop_reason}\n")
                         print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
                         if debug_web_review:
-                            # Find closest commentable lines for suggestion
-                            from difflib import get_close_matches
-                            file_basename = os.path.basename(file_path)
-                            batch_basenames = {os.path.basename(f): f for f in batch_files}
-                            close_matches = get_close_matches(file_basename, batch_basenames.keys(), n=2, cutoff=0.6)
-                            closest_files = [batch_basenames[match] for match in close_matches if batch_basenames[match] != file_path]
+                            # Find closest files for suggestion
+                            closest_files = _find_closest_files(file_path, batch_files, n=2)
                             
                             drop_reasons.append({
                                 "file": file_path,
