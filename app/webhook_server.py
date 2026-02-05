@@ -407,8 +407,8 @@ def handle_pull_request(payload: dict):
 
         # DEBUG_WEB_REVIEW: Log changed files categorization
         if os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]:
-            web_extensions = {".tsx", ".jsx", ".ts", ".js", ".html", ".css"}
-            web_files = [f for f in changed_files if any(f.endswith(ext) for ext in web_extensions)]
+            from app.constants import WEB_EXTENSIONS
+            web_files = [f for f in changed_files if any(f.endswith(ext) for ext in WEB_EXTENSIONS)]
             non_web_files = [f for f in changed_files if f not in web_files]
             
             logger.info("[DEBUG_WEB_REVIEW] File categorization:")

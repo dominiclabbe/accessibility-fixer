@@ -320,14 +320,22 @@ def validate_issues_in_batch(
 
         # Skip if file not in batch
         if file_path not in batch_file_set:
-            drop_reason = f"file not in batch (proposed: {file_path}, batch: {batch_files})"
+            drop_reason = f"file not in batch (proposed: {file_path}, batch has {len(batch_files)} files)"
             print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
             if debug_web_review:
+                # Find closest matches based on filename similarity
+                from difflib import get_close_matches
+                file_basename = os.path.basename(file_path)
+                batch_basenames = {os.path.basename(f): f for f in batch_files}
+                close_matches = get_close_matches(file_basename, batch_basenames.keys(), n=3, cutoff=0.6)
+                closest_files = [batch_basenames[match] for match in close_matches] if close_matches else []
+                
                 drop_reasons.append({
                     "file": file_path,
                     "line": line,
                     "reason": drop_reason,
-                    "title": issue.get("title", "")[:60]
+                    "title": issue.get("title", "")[:60],
+                    "closest_files": closest_files if closest_files else ["(no close matches)"]
                 })
             continue
 
@@ -402,14 +410,19 @@ def validate_issues_in_batch(
                             print(f"  [RESULT] Dropping issue - {drop_reason}\n")
                         print(f"⚠️  Dropping issue for {file_path}:{line} - {drop_reason}")
                         if debug_web_review:
-                            # Suggest closest match
-                            closest_files = [f for f in batch_files if f != file_path][:3]
+                            # Find closest commentable lines for suggestion
+                            from difflib import get_close_matches
+                            file_basename = os.path.basename(file_path)
+                            batch_basenames = {os.path.basename(f): f for f in batch_files}
+                            close_matches = get_close_matches(file_basename, batch_basenames.keys(), n=2, cutoff=0.6)
+                            closest_files = [batch_basenames[match] for match in close_matches if batch_basenames[match] != file_path]
+                            
                             drop_reasons.append({
                                 "file": file_path,
                                 "line": line,
                                 "reason": drop_reason,
                                 "title": issue.get("title", "")[:60],
-                                "closest_files": closest_files
+                                "closest_files": closest_files if closest_files else []
                             })
                         continue
             else:

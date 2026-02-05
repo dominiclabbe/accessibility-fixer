@@ -95,7 +95,11 @@ class PRReviewer:
 
         # DEBUG_WEB_REVIEW: Track web files in batches
         debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
-        web_extensions = {".tsx", ".jsx", ".ts", ".js", ".html", ".css"}
+        if debug_web_review:
+            from app.constants import WEB_EXTENSIONS
+            web_extensions = WEB_EXTENSIONS
+        else:
+            web_extensions = set()
 
         for batch_idx, file_batch in enumerate(batches):
             print(
