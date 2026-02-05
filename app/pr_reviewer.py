@@ -111,8 +111,9 @@ class PRReviewer:
                     + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
                 )
 
-            # Extract commentable lines for validation
+            # Extract commentable lines and line texts for validation
             commentable_lines = DiffParser.extract_commentable_lines(batch_diff)
+            line_texts = DiffParser.extract_line_texts(batch_diff)
 
             # Create prompt
             prompt = self._create_review_prompt(
@@ -133,8 +134,9 @@ class PRReviewer:
                     normalized_issues.append(normalized)
 
             # Validate issues are in batch and on commentable lines
+            # Uses anchor-based resolution when available
             validated_issues = validate_issues_in_batch(
-                normalized_issues, file_batch, commentable_lines
+                normalized_issues, file_batch, commentable_lines, line_texts
             )
 
             # Add validated issues to results
@@ -289,6 +291,13 @@ class PRReviewer:
             "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
             'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
             "",
+            "OPTIONAL: You may include an 'anchor' object to improve inline comment placement:",
+            '- anchor: {"anchor_text": "Slider(", "anchor_preference": "call"}',
+            "- anchor_text: short exact code snippet to search for (e.g., 'Slider(', '.clickable', 'TextField(')",
+            '- anchor_preference: optional hint like "call", "modifier", "declaration"',
+            "- If provided, the comment will be anchored to the line containing anchor_text (closest to your proposed line)",
+            "- If omitted, the system will try to infer the anchor from title/suggested_fix",
+            "",
             "Rules:",
             "- Report issues ONLY in the CHANGED code shown in this batch diff.",
         ])
@@ -302,6 +311,7 @@ class PRReviewer:
             "- The 'line' field MUST be the EXACT line number in the NEW file where the issue occurs (not a guess or range).",
             "- Count carefully from the '@@ ... +START ...' marker to get the correct line number.",
             "- Point to the specific line with the problem (e.g., the line with contentDescription=null, not the function declaration).",
+            "- If you want more precise anchor placement, include the 'anchor' object with 'anchor_text'.",
             "- wcag_sc MUST be a single string. If multiple SC apply, join with '; '.",
             f"- current_code and suggested_fix must be short snippets (max {self.max_snippet_lines} lines each).",
             "- resources MUST be an array of strings (or empty array []).",

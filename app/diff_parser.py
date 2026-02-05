@@ -136,6 +136,60 @@ class DiffParser:
         return commentable
 
     @staticmethod
+    def extract_line_texts(diff_text: str) -> Dict[str, Dict[int, str]]:
+        """
+        Extract line number to text mapping for commentable lines in diff.
+
+        This is used for anchor-based line resolution to find the best
+        line to anchor a comment based on code content.
+
+        Args:
+            diff_text: Unified diff text
+
+        Returns:
+            Dict mapping file paths to {line_number: line_text} dicts
+        """
+        line_texts = {}
+        current_file = None
+        current_line = 0
+        in_hunk = False
+
+        for line in diff_text.split('\n'):
+            # Match file header: +++ b/path/to/file
+            if line.startswith('+++ b/'):
+                current_file = line[6:]  # Skip '+++ b/'
+                line_texts[current_file] = {}
+                in_hunk = False
+                continue
+
+            # Match hunk header: @@ -old_start,old_count +new_start,new_count @@
+            hunk_match = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
+            if hunk_match and current_file:
+                current_line = int(hunk_match.group(1))
+                in_hunk = True
+                continue
+
+            # Process lines in hunk
+            if in_hunk and current_file:
+                if line.startswith('+') and not line.startswith('+++'):
+                    # Added line - extract text (remove '+' prefix)
+                    line_texts[current_file][current_line] = line[1:]
+                    current_line += 1
+                elif line.startswith(' '):
+                    # Context line - extract text (remove ' ' prefix)
+                    line_texts[current_file][current_line] = line[1:]
+                    current_line += 1
+                elif line.startswith('-'):
+                    # Removed line - don't increment new file line number
+                    pass
+                else:
+                    # Empty or other line - might be end of hunk
+                    if line and not line.startswith('\\'):
+                        in_hunk = False
+
+        return line_texts
+
+    @staticmethod
     def extract_changed_line_ranges(diff_text: str) -> Dict[str, List[Tuple[int, int]]]:
         """
         Extract changed line ranges from diff (for validation).
@@ -206,6 +260,126 @@ class DiffParser:
         return nearest
 
     @staticmethod
+    def infer_anchor_text(issue: Dict) -> Optional[str]:
+        """
+        Infer anchor text from issue title and suggested_fix using heuristics.
+
+        This is used when the model doesn't provide an explicit anchor_text.
+
+        Args:
+            issue: Issue dict
+
+        Returns:
+            Inferred anchor text or None
+        """
+        title = issue.get('title', '').lower()
+        suggested_fix = issue.get('suggested_fix', '')
+        
+        # Common Compose component patterns
+        component_patterns = [
+            ('slider', 'Slider('),
+            ('switch', 'Switch('),
+            ('textfield', 'TextField('),
+            ('text field', 'TextField('),
+            ('button', 'Button('),
+            ('image', 'Image('),
+            ('icon', 'Icon('),
+            ('checkbox', 'Checkbox('),
+            ('radiobutton', 'RadioButton('),
+            ('floatingactionbutton', 'FloatingActionButton('),
+            ('fab', 'FloatingActionButton('),
+        ]
+        
+        # Check title for component mentions
+        for keyword, anchor in component_patterns:
+            if keyword in title:
+                return anchor
+        
+        # Check for clickable modifier
+        if 'clickable' in title or 'click' in title:
+            # Check suggested_fix for specific pattern
+            if '.clickable' in suggested_fix:
+                return '.clickable'
+            elif 'clickable(' in suggested_fix:
+                return 'clickable('
+        
+        # Check for modifier chains in suggested_fix
+        if 'Modifier.' in suggested_fix or '.semantics' in suggested_fix:
+            if '.semantics' in suggested_fix:
+                return '.semantics'
+        
+        return None
+
+    @staticmethod
+    def resolve_anchor_line(
+        issue: Dict,
+        commentable_lines: List[int],
+        line_texts: Dict[int, str],
+        max_distance: int = 20
+    ) -> Optional[int]:
+        """
+        Resolve the best anchor line for an issue using anchor text matching.
+
+        This implements deterministic anchor resolution:
+        1. Extract anchor_text from issue.anchor.anchor_text or infer from title
+        2. Find commentable lines that contain the anchor text
+        3. Prefer the match closest to the model's proposed line
+        4. Fall back to nearest commentable line if no match
+
+        Args:
+            issue: Issue dict (may contain 'anchor' with 'anchor_text')
+            commentable_lines: List of commentable line numbers
+            line_texts: Dict mapping line numbers to line text
+            max_distance: Maximum distance to search for fallback
+
+        Returns:
+            Best anchor line number or None if no suitable line found
+        """
+        if not commentable_lines:
+            return None
+        
+        original_line = issue.get('line', 0)
+        if original_line <= 0:
+            return None
+        
+        # Get anchor information
+        anchor = issue.get('anchor', {})
+        anchor_text = anchor.get('anchor_text') if isinstance(anchor, dict) else None
+        
+        # Infer anchor text if not provided
+        if not anchor_text:
+            anchor_text = DiffParser.infer_anchor_text(issue)
+        
+        # If we have anchor text, try to find matching lines
+        if anchor_text:
+            matches = []
+            
+            # First try case-sensitive match
+            for line_num in commentable_lines:
+                line_text = line_texts.get(line_num, '')
+                if anchor_text in line_text:
+                    matches.append(line_num)
+            
+            # If no case-sensitive matches, try case-insensitive
+            if not matches:
+                anchor_text_lower = anchor_text.lower()
+                for line_num in commentable_lines:
+                    line_text = line_texts.get(line_num, '')
+                    if anchor_text_lower in line_text.lower():
+                        matches.append(line_num)
+            
+            # If we have matches, pick the one closest to original line
+            if matches:
+                # Find closest match to original line
+                best_match = min(matches, key=lambda ln: abs(ln - original_line))
+                return best_match
+        
+        # Fall back to nearest commentable line
+        return DiffParser.find_nearest_commentable_line(
+            original_line, commentable_lines, max_distance
+        )
+
+    @staticmethod
     def get_code_anchor(diff_text: str, file_path: str, line_num: int, context_lines: int = 2) -> str:
         """
         Extract a code anchor (snippet) from diff for a specific file and line.
@@ -269,15 +443,19 @@ class DiffParser:
 def validate_issues_in_batch(
     issues: List[Dict],
     batch_files: List[str],
-    commentable_lines: Dict[str, List[int]]
+    commentable_lines: Dict[str, List[int]],
+    line_texts: Optional[Dict[str, Dict[int, str]]] = None
 ) -> List[Dict]:
     """
     Validate and adjust issues to ensure they're in the batch and on commentable lines.
+
+    Uses anchor-based resolution to find the most relevant line when available.
 
     Args:
         issues: List of issues from model
         batch_files: List of files in current batch
         commentable_lines: Dict of file -> commentable line numbers
+        line_texts: Optional dict of file -> {line_num: line_text} for anchor resolution
 
     Returns:
         List of validated issues (may be adjusted or filtered)
@@ -299,18 +477,37 @@ def validate_issues_in_batch(
             print(f"⚠️  Dropping issue for {file_path}:{line} - invalid line number")
             continue
 
-        # Check if line is commentable
+        # Try to resolve best line using anchor information
         if file_path in commentable_lines:
             file_commentable = commentable_lines[file_path]
-            if line not in file_commentable:
-                # Try to adjust to nearest commentable line
-                nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
-                if nearest:
-                    print(f"  Adjusted {file_path}:{line} -> {nearest} (nearest commentable)")
-                    issue['line'] = nearest
-                else:
-                    print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
-                    continue
+            adjusted_line = None
+            
+            # First, try anchor-based resolution if line_texts available
+            # This is done EVEN if the original line is commentable, to get more precise placement
+            if line_texts and file_path in line_texts:
+                file_line_texts = line_texts[file_path]
+                adjusted_line = DiffParser.resolve_anchor_line(
+                    issue, file_commentable, file_line_texts
+                )
+                if adjusted_line and adjusted_line != line:
+                    print(f"  Adjusted {file_path}:{line} -> {adjusted_line} (anchor-based)")
+                    issue['line'] = adjusted_line
+                elif adjusted_line == line:
+                    # Anchor resolution confirmed the original line is correct
+                    pass
+            
+            # If no anchor resolution or it failed, check if we need adjustment
+            if not adjusted_line:
+                if line not in file_commentable:
+                    # Line is not commentable, try nearest
+                    adjusted_line = DiffParser.find_nearest_commentable_line(line, file_commentable)
+                    if adjusted_line:
+                        print(f"  Adjusted {file_path}:{line} -> {adjusted_line} (nearest commentable)")
+                        issue['line'] = adjusted_line
+                    else:
+                        print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
+                        continue
+                # else: line is already commentable and no anchor adjustment needed
 
         validated.append(issue)
 
