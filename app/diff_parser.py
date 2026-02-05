@@ -334,8 +334,14 @@ def validate_issues_in_batch(
                     right_line_to_text = line_texts[file_path]
                     
                     if debug_enabled:
-                        print(f"  [anchor] Resolving {file_path}:{line}")
-                        print(f"  [anchor] Issue: {issue.get('title', '')[:80]}")
+                        print(f"\n[DEBUG_ANCHOR_RESOLUTION] Resolving non-commentable line")
+                        print(f"  File: {file_path}")
+                        print(f"  Proposed line: {line}")
+                        print(f"  Issue: {issue.get('title', '')[:80]}")
+                        print(f"  Explicit anchor_text: {issue.get('anchor_text', 'N/A')}")
+                        call_site_from_current = SemanticAnchorResolver.extract_call_site_token(issue.get('current_code'))
+                        if call_site_from_current:
+                            print(f"  Extracted call-site token: {call_site_from_current}")
                     
                     # Use new deterministic resolve_anchor_line function
                     resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
@@ -347,7 +353,11 @@ def validate_issues_in_batch(
                     )
 
                 if resolved_line:
-                    print(f"  ✓ Adjusted {file_path}:{line} -> {resolved_line} (anchor: {matched_text[:60] if matched_text else 'N/A'})")
+                    if debug_enabled:
+                        print(f"  [RESULT] Adjusted {file_path}:{line} -> {resolved_line}")
+                        print(f"  [RESULT] Matched text: {matched_text[:80] if matched_text else 'N/A'}\n")
+                    else:
+                        print(f"  ✓ Adjusted {file_path}:{line} -> {resolved_line} (anchor: {matched_text[:60] if matched_text else 'N/A'})")
                     issue['line'] = resolved_line
                     # Store matched text for fingerprinting
                     issue['_anchor_matched_text'] = matched_text
@@ -355,11 +365,24 @@ def validate_issues_in_batch(
                     # Fall back to nearest commentable line
                     nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
                     if nearest:
-                        print(f"  ⚠️  Adjusted {file_path}:{line} -> {nearest} (nearest commentable, no anchor found)")
+                        if debug_enabled:
+                            print(f"  [RESULT] Adjusted {file_path}:{line} -> {nearest} (nearest commentable, no anchor found)\n")
+                        else:
+                            print(f"  ⚠️  Adjusted {file_path}:{line} -> {nearest} (nearest commentable, no anchor found)")
                         issue['line'] = nearest
                     else:
+                        if debug_enabled:
+                            print(f"  [RESULT] Dropping issue - no commentable line nearby\n")
                         print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
                         continue
+            else:
+                # Line is already commentable - log if debug enabled
+                if debug_enabled:
+                    print(f"\n[DEBUG_ANCHOR_RESOLUTION] Line already commentable")
+                    print(f"  File: {file_path}")
+                    print(f"  Line: {line}")
+                    print(f"  Issue: {issue.get('title', '')[:80]}")
+                    print(f"  [RESULT] Using proposed line {line} (already commentable)\n")
 
         validated.append(issue)
 

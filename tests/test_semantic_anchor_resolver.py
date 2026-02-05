@@ -786,5 +786,260 @@ index aaaaaaa..bbbbbbb 100644
         assert any('contentDescription' in str(c) for c in candidates_xml)
 
 
+class TestCallSitePrioritization:
+    """Tests for call-site prioritization from current_code field."""
+
+    def test_compose_outlinedtextfield_vs_button_scenario(self):
+        """
+        Regression test for Compose scenario: OutlinedTextField at line 462 should be chosen
+        over Button at line 471 when issue is about placeholder/label on text field.
+        """
+        # Simulated diff with OutlinedTextField and later Button
+        compose_diff = """diff --git a/app/src/main/java/com/example/LoginScreen.kt b/app/src/main/java/com/example/LoginScreen.kt
+index 1234567..abcdefg 100644
+--- a/app/src/main/java/com/example/LoginScreen.kt
++++ b/app/src/main/java/com/example/LoginScreen.kt
+@@ -459,15 +459,21 @@ fun LoginScreen() {
+     Column(
+         modifier = Modifier.padding(16.dp)
+     ) {
++        OutlinedTextField(
++            value = email,
++            onValueChange = { email = it },
++            placeholder = { Text("") }
++        )
++        
++        Spacer(modifier = Modifier.height(16.dp))
++        
++        Button(
++            onClick = { login() }
++        ) {
++            Text("Login")
++        }
+     }
+ }
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(compose_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            compose_diff, commentable_lines
+        )
+        
+        file_path = "app/src/main/java/com/example/LoginScreen.kt"
+        right_line_to_text = line_texts[file_path]
+        
+        # Issue about placeholder-only label on text field
+        # Model might propose line 471 (Button line) but current_code shows OutlinedTextField
+        issue = {
+            'file': file_path,
+            'line': 471,  # Wrong line (Button)
+            'title': 'TextField with placeholder-only label',
+            'description': 'OutlinedTextField uses empty placeholder instead of label',
+            'current_code': 'OutlinedTextField(\n    value = email,\n    placeholder = { Text("") }\n)',
+            'wcag_sc': '1.3.1',
+        }
+        
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=471,
+            file_extension='.kt',
+            debug=False
+        )
+        
+        # Should resolve to OutlinedTextField line, not Button line
+        assert resolved_line is not None
+        assert 'OutlinedTextField(' in matched_text
+        assert resolved_line == 462  # OutlinedTextField line
+        assert 'Button' not in matched_text
+
+    def test_swiftui_textfield_vs_button_scenario(self):
+        """
+        Regression test for SwiftUI scenario: TextField at ~line 75 should be chosen
+        over Button at ~line 82 when issue is about placeholder/label on text field.
+        """
+        # Simulated diff with TextField and later Button
+        swiftui_diff = """diff --git a/LoginView.swift b/LoginView.swift
+index 1111111..2222222 100644
+--- a/LoginView.swift
++++ b/LoginView.swift
+@@ -72,12 +72,20 @@ struct LoginView: View {
+     var body: some View {
+         VStack {
+             Text("Login")
++            
++            TextField("", text: $email)
++                .textFieldStyle(RoundedBorderTextFieldStyle())
++                .padding()
++            
++            Spacer()
++            
++            Button(action: {
++                login()
++            }) {
++                Text("Login")
++            }
+         }
+     }
+ }
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(swiftui_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            swiftui_diff, commentable_lines
+        )
+        
+        file_path = "LoginView.swift"
+        right_line_to_text = line_texts[file_path]
+        
+        # Issue about placeholder-only label on text field
+        # Model might propose line 82 (Button line) but current_code shows TextField
+        issue = {
+            'file': file_path,
+            'line': 82,  # Wrong line (Button)
+            'title': 'TextField with empty placeholder',
+            'description': 'TextField uses empty string as placeholder',
+            'current_code': 'TextField("", text: $email)\n    .textFieldStyle(RoundedBorderTextFieldStyle())',
+            'wcag_sc': '1.3.1',
+        }
+        
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=82,
+            file_extension='.swift',
+            debug=False
+        )
+        
+        # Should resolve to TextField line, not Button line
+        assert resolved_line is not None
+        assert 'TextField(' in matched_text
+        assert resolved_line == 76  # TextField line
+        assert 'Button' not in matched_text
+
+    def test_call_site_priority_over_explicit_anchor_modifier(self):
+        """
+        Test that when current_code contains a call-site token AND explicit anchor_text
+        points to a modifier/style line, the call-site is prioritized.
+        """
+        # Diff with OutlinedTextField and modifier line
+        compose_diff = """diff --git a/FormScreen.kt b/FormScreen.kt
+index aaaaaaa..bbbbbbb 100644
+--- a/FormScreen.kt
++++ b/FormScreen.kt
+@@ -10,10 +10,15 @@ fun FormScreen() {
+     Column {
++        OutlinedTextField(
++            value = name,
++            onValueChange = { name = it },
++            modifier = Modifier.fillMaxWidth()
++        )
+     }
+ }
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(compose_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            compose_diff, commentable_lines
+        )
+        
+        file_path = "FormScreen.kt"
+        right_line_to_text = line_texts[file_path]
+        
+        # Issue with explicit anchor_text pointing to modifier but current_code shows OutlinedTextField
+        issue = {
+            'file': file_path,
+            'line': 14,  # Might be on modifier line
+            'title': 'TextField missing label',
+            'description': 'OutlinedTextField needs accessibility label',
+            'anchor_text': 'modifier = Modifier.fillMaxWidth()',  # Explicit anchor to modifier
+            'current_code': 'OutlinedTextField(\n    value = name,\n    modifier = Modifier.fillMaxWidth()\n)',
+            'wcag_sc': '4.1.2',
+        }
+        
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=14,
+            file_extension='.kt',
+            debug=False
+        )
+        
+        # Should prioritize call-site (OutlinedTextField) over explicit modifier anchor
+        assert resolved_line is not None
+        assert 'OutlinedTextField(' in matched_text
+        assert resolved_line == 11  # OutlinedTextField line, not modifier line
+
+    def test_call_site_extraction_from_current_code(self):
+        """Test that extract_call_site_token correctly extracts UI element tokens."""
+        # Compose/Kotlin
+        assert SemanticAnchorResolver.extract_call_site_token('OutlinedTextField(\n    value = x\n)') == 'OutlinedTextField('
+        assert SemanticAnchorResolver.extract_call_site_token('TextField(value = y)') == 'TextField('
+        assert SemanticAnchorResolver.extract_call_site_token('Button(onClick = {})') == 'Button('
+        assert SemanticAnchorResolver.extract_call_site_token('Slider(value = 0.5f)') == 'Slider('
+        
+        # SwiftUI
+        assert SemanticAnchorResolver.extract_call_site_token('Toggle("Label", isOn: $enabled)') == 'Toggle('
+        assert SemanticAnchorResolver.extract_call_site_token('TextField("", text: $name)') == 'TextField('
+        
+        # UIKit
+        assert SemanticAnchorResolver.extract_call_site_token('let slider = UISlider()') == 'UISlider('
+        assert SemanticAnchorResolver.extract_call_site_token('UIButton()') == 'UIButton('
+        
+        # No match
+        assert SemanticAnchorResolver.extract_call_site_token('modifier = Modifier.fillMaxWidth()') is None
+        assert SemanticAnchorResolver.extract_call_site_token('.padding()') is None
+        assert SemanticAnchorResolver.extract_call_site_token('') is None
+        assert SemanticAnchorResolver.extract_call_site_token(None) is None
+
+    def test_swiftui_textfieldstyle_vs_textfield_call_site(self):
+        """
+        Test that TextField call-site is chosen over .textFieldStyle() modifier
+        when both are present.
+        """
+        swiftui_diff = """diff --git a/SettingsView.swift b/SettingsView.swift
+index 3333333..4444444 100644
+--- a/SettingsView.swift
++++ b/SettingsView.swift
+@@ -20,8 +20,11 @@ struct SettingsView: View {
+     var body: some View {
+         VStack {
+             Text("Settings")
++            TextField("", text: $username)
++                .textFieldStyle(RoundedBorderTextFieldStyle())
++                .padding()
+         }
+     }
+ }
+"""
+        commentable_lines = DiffParser.extract_commentable_lines(swiftui_diff)
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            swiftui_diff, commentable_lines
+        )
+        
+        file_path = "SettingsView.swift"
+        right_line_to_text = line_texts[file_path]
+        
+        # Issue with explicit anchor to textFieldStyle but current_code shows TextField
+        issue = {
+            'file': file_path,
+            'line': 24,  # Might be on .textFieldStyle line
+            'title': 'TextField missing label',
+            'anchor_text': '.textFieldStyle(',
+            'current_code': 'TextField("", text: $username)\n    .textFieldStyle(RoundedBorderTextFieldStyle())',
+            'wcag_sc': '1.3.1',
+        }
+        
+        resolved_line, matched_text = SemanticAnchorResolver.resolve_anchor_line(
+            issue=issue,
+            right_line_to_text=right_line_to_text,
+            fallback_line=24,
+            file_extension='.swift',
+            debug=False
+        )
+        
+        # Should prioritize TextField( call-site over .textFieldStyle()
+        assert resolved_line is not None
+        assert 'TextField(' in matched_text
+        assert resolved_line == 23  # TextField line
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
