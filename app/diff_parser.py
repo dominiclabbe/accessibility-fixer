@@ -32,6 +32,9 @@ class DiffParser:
             if line.startswith('diff --git '):
                 # Save previous file if exists
                 if current_file and current_diff_lines:
+                    # Remove trailing empty lines from previous file
+                    while current_diff_lines and current_diff_lines[-1].strip() == '':
+                        current_diff_lines.pop()
                     file_diffs[current_file] = '\n'.join(current_diff_lines)
 
                 # Extract file path from "a/..." or "b/..."
