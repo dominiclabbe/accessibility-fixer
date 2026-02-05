@@ -107,7 +107,8 @@ class TestCommentPosterDebugFooter:
             
             assert "# Accessibility Review Summary" in summary
             assert "_debug:" not in summary
-            assert "accessibility-fixer@" not in summary or "🤖 Automated by [accessibility-fixer]" in summary
+            # The main footer should still be present
+            assert "🤖 Automated by [accessibility-fixer]" in summary
 
     def test_review_summary_with_debug_stamp_enabled(self):
         """Test that review summary includes debug footer when enabled."""

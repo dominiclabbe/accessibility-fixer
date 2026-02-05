@@ -63,11 +63,15 @@ def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
     
     if reviewer_config:
         # Add model info
-        model = reviewer_config.get("model", os.getenv("SCOUT_MODEL", "unknown"))
+        model = reviewer_config.get("model")
+        if model is None:
+            model = os.getenv("SCOUT_MODEL", "unknown")
         parts.append(f"model={model}")
         
         # Add base URL/provider if available
-        base_url = reviewer_config.get("base_url", os.getenv("SCOUT_BASE_URL", ""))
+        base_url = reviewer_config.get("base_url")
+        if base_url is None:
+            base_url = os.getenv("SCOUT_BASE_URL", "")
         if base_url:
             # Extract just the domain for brevity
             if "://" in base_url:
@@ -75,10 +79,14 @@ def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
                 parts.append(f"provider={domain}")
         
         # Add key runtime settings
-        files_per_batch = reviewer_config.get("files_per_batch", os.getenv("SCOUT_FILES_PER_BATCH", "1"))
+        files_per_batch = reviewer_config.get("files_per_batch")
+        if files_per_batch is None:
+            files_per_batch = os.getenv("SCOUT_FILES_PER_BATCH", "1")
         parts.append(f"files_per_batch={files_per_batch}")
         
-        max_diff_chars = reviewer_config.get("max_diff_chars", os.getenv("SCOUT_MAX_DIFF_CHARS", "180000"))
+        max_diff_chars = reviewer_config.get("max_diff_chars")
+        if max_diff_chars is None:
+            max_diff_chars = os.getenv("SCOUT_MAX_DIFF_CHARS", "180000")
         parts.append(f"max_diff_chars={max_diff_chars}")
         
         # Check if SARIF is enabled
