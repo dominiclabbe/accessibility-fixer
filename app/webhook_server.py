@@ -22,6 +22,7 @@ from app.github_app_auth import create_auth_from_env
 from app.guide_loader import GuideLoader
 from app.pr_reviewer import create_reviewer_from_env, PRReviewer
 from app.comment_poster import CommentPoster
+from app.sarif_generator import generate_and_write_sarif
 
 
 # Configure logging
@@ -54,6 +55,10 @@ def filter_reviewable_files(files: list) -> list:
     - Build/config files (gradle, json, yaml, plist, properties, etc.)
     - Project files (xcodeproj, xcworkspace, etc.)
     - CI/CD files (.github/workflows/*)
+    
+    Special handling for XML:
+    - Include: Android layout files (res/layout/**/*.xml)
+    - Exclude: AndroidManifest.xml, config XMLs, gradle XMLs
 
     Args:
         files: List of file paths
@@ -73,7 +78,6 @@ def filter_reviewable_files(files: list) -> list:
         '.yaml',
         '.yml',
         '.plist',       # iOS config
-        '.xml',         # Android manifests and resources (mostly config)
 
         # Project/IDE files
         '.pbxproj',     # Xcode project
@@ -102,12 +106,29 @@ def filter_reviewable_files(files: list) -> list:
         'Info.plist',
         'Podfile',
         'Podfile.lock',
+        'AndroidManifest.xml',  # Exclude Android manifest
     }
 
     excluded_patterns = [
         'settings.gradle',
         '.gradle.kts',
         '/wrapper/',        # Gradle wrapper
+    ]
+    
+    # XML files to exclude (config/build files)
+    excluded_xml_patterns = [
+        '/res/values/',      # String/color/dimen resources
+        '/res/drawable/',    # Drawable resources
+        '/res/mipmap/',      # Mipmap resources
+        '/res/xml/',         # XML preferences/configs
+        '/res/raw/',         # Raw resources
+        '/res/menu/',        # Menu resources
+        '/res/anim/',        # Animation resources
+        '/res/animator/',    # Animator resources
+        '/res/color/',       # Color state lists
+        '/res/font/',        # Font resources
+        'gradle/',           # Gradle build files
+        'maven/',            # Maven build files
     ]
 
     reviewable = []
@@ -118,6 +139,28 @@ def filter_reviewable_files(files: list) -> list:
         if any(f'/{excluded_dir}/' in file_path or file_path.startswith(f'{excluded_dir}/')
                for excluded_dir in excluded_directories):
             logger.info(f"Skipping non-reviewable file: {file_path} (excluded directory)")
+            continue
+
+        # Special handling for XML files
+        if file_path.endswith('.xml'):
+            # Check if it's an excluded filename
+            if filename in excluded_filenames:
+                logger.info(f"Skipping non-reviewable file: {file_path} (excluded XML file)")
+                continue
+            
+            # Check if it's in an excluded XML directory
+            if any(pattern in file_path for pattern in excluded_xml_patterns):
+                logger.info(f"Skipping non-reviewable file: {file_path} (excluded XML type)")
+                continue
+            
+            # Include Android layout XML files
+            if '/res/layout/' in file_path or '/res/layout-' in file_path:
+                logger.info(f"Including Android layout file: {file_path}")
+                reviewable.append(file_path)
+                continue
+            
+            # Exclude other XML files
+            logger.info(f"Skipping non-reviewable file: {file_path} (non-layout XML)")
             continue
 
         # Check file extension
@@ -443,6 +486,24 @@ def handle_pull_request(payload: dict):
             all_issues.extend(remaining_issues)
 
         logger.info(f"Review complete. Found {len(all_issues)} total accessibility issues")
+
+        # Generate SARIF output if requested
+        if os.getenv("OUTPUT_SARIF", "").lower() in ["1", "true", "yes"]:
+            sarif_path = os.getenv("SARIF_OUTPUT_PATH", "accessibility-report.sarif")
+            repo_uri = f"https://github.com/{repo_owner}/{repo_name}"
+            
+            logger.info(f"Generating SARIF report to {sarif_path}...")
+            sarif_success = generate_and_write_sarif(
+                all_issues,
+                sarif_path,
+                repo_uri=repo_uri,
+                repo_ref=head_sha,
+            )
+            
+            if sarif_success:
+                logger.info(f"✅ SARIF report generated: {sarif_path}")
+            else:
+                logger.warning(f"⚠️  Failed to generate SARIF report")
 
         # Determine final status based on severities
         if all_issues:

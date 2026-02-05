@@ -111,9 +111,93 @@ class CommentPoster:
             return True
 
         except requests.exceptions.HTTPError as e:
+            # Handle 422 errors (invalid line numbers) with fallback
+            if e.response and e.response.status_code == 422:
+                print(f"⚠️  422 Error posting review (likely invalid line numbers)")
+                print(f"Response: {e.response.text}")
+                
+                # Try posting as non-inline comments instead
+                print("Attempting fallback: posting as non-inline PR comments...")
+                return self._post_as_fallback_comments(
+                    repo_owner, repo_name, pr_number, issues, headers
+                )
+            
             print(f"❌ Error posting review: {e}")
             print(f"Response: {e.response.text if e.response else 'No response'}")
             return False
+
+    def _post_as_fallback_comments(
+        self,
+        repo_owner: str,
+        repo_name: str,
+        pr_number: int,
+        issues: List[Dict],
+        headers: Dict[str, str],
+    ) -> bool:
+        """
+        Post issues as non-inline PR comments when inline posting fails.
+        
+        Args:
+            repo_owner: Repository owner
+            repo_name: Repository name
+            pr_number: PR number
+            issues: List of issues that failed to post inline
+            headers: Headers with authorization
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Group issues by file for cleaner output
+        issues_by_file = {}
+        for issue in issues:
+            file_path = issue.get("file", "unknown")
+            if file_path not in issues_by_file:
+                issues_by_file[file_path] = []
+            issues_by_file[file_path].append(issue)
+        
+        # Build comment body
+        body_parts = [
+            "## ⚠️ Accessibility Review (Fallback Mode)",
+            "",
+            "The following accessibility issues were found but could not be posted as inline comments.",
+            "This may be due to line number conflicts or diff changes.",
+            "",
+        ]
+        
+        for file_path, file_issues in sorted(issues_by_file.items()):
+            body_parts.append(f"### 📄 {file_path}")
+            body_parts.append("")
+            
+            for issue in file_issues:
+                line = issue.get("line", "?")
+                severity = issue.get("severity", "")
+                title = issue.get("title", "")
+                wcag_sc = issue.get("wcag_sc", "")
+                description = issue.get("description", "")
+                
+                # Severity emoji
+                severity_emoji = {
+                    "Critical": "🔴",
+                    "High": "🟠",
+                    "Medium": "🟡",
+                    "Low": "🔵",
+                }.get(severity, "⚪")
+                
+                body_parts.append(f"#### {severity_emoji} Line {line}: {title}")
+                body_parts.append(f"**WCAG:** {wcag_sc} | **Severity:** {severity}")
+                if description:
+                    body_parts.append(f"> {description}")
+                body_parts.append("")
+        
+        body_parts.append("---")
+        body_parts.append("🤖 Posted by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)")
+        
+        comment_body = "\n".join(body_parts)
+        
+        # Post as simple comment
+        return self.post_simple_comment(
+            repo_owner, repo_name, pr_number, comment_body, headers
+        )
 
     def post_commit_status(
         self,
