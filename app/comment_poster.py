@@ -77,9 +77,16 @@ def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
             base_url = os.getenv("SCOUT_BASE_URL", "")
         if base_url:
             # Extract just the domain for brevity
-            if "://" in base_url:
-                domain = base_url.split("://")[1].split("/")[0]
-                parts.append(f"provider={domain}")
+            try:
+                if "://" in base_url:
+                    # Split on :// and then on / to get domain
+                    url_parts = base_url.split("://", 1)
+                    if len(url_parts) > 1:
+                        domain = url_parts[1].split("/")[0]
+                        parts.append(f"provider={domain}")
+            except Exception:
+                # Skip provider if URL parsing fails
+                pass
         
         # Add key runtime settings
         files_per_batch = reviewer_config.get("files_per_batch")

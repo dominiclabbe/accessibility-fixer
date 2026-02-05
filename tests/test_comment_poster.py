@@ -27,6 +27,7 @@ class TestGetAppVersion:
         """Test git fallback when env var not set."""
         with patch.dict(os.environ, {}, clear=True):
             with patch("subprocess.run") as mock_run:
+                # Mock subprocess.CompletedProcess - only returncode and stdout are used
                 mock_run.return_value = MagicMock(
                     returncode=0,
                     stdout="abc1234\n"
