@@ -133,8 +133,9 @@ class PRReviewer:
                     normalized_issues.append(normalized)
 
             # Validate issues are in batch and on commentable lines
+            # Pass batch_diff for semantic anchor resolution
             validated_issues = validate_issues_in_batch(
-                normalized_issues, file_batch, commentable_lines
+                normalized_issues, file_batch, commentable_lines, batch_diff
             )
 
             # Add validated issues to results

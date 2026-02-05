@@ -102,7 +102,54 @@ def is_no_issues_placeholder(issue: Dict) -> bool:
 - Cleaner PR reviews without noise
 - Only real issues are posted
 
-### 5. Android XML Layout Support
+### 5. Semantic Anchor Resolution
+
+**Problem:** Comments could land on valid but semantically wrong lines (e.g., a Slider issue anchored to a Text label line instead of the `Slider(` call).
+
+**Solution:** Implemented `SemanticAnchorResolver` that intelligently resolves issue line numbers to the correct UI element:
+
+```python
+from app.semantic_anchor_resolver import SemanticAnchorResolver
+
+# Extract line texts from diff
+line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+    diff_text, commentable_lines
+)
+
+# Resolve issue to semantic anchor (e.g., Slider( line)
+resolved_line = SemanticAnchorResolver.resolve_issue_line(
+    issue,
+    file_path,
+    commentable_lines[file_path],
+    line_texts[file_path],
+    max_distance=20
+)
+```
+
+**Algorithm:**
+1. Extract anchor candidates from issue metadata:
+   - Explicit `anchor_text` field (future-proofing)
+   - Keywords from title/description (e.g., "slider" → `Slider(` patterns)
+   - UI element names (e.g., "Button" → `Button(`, `<Button`, `UIButton`)
+
+2. Search for candidates in commentable line texts
+3. Choose match closest to model-proposed line (within max_distance)
+4. Fall back to nearest commentable line if no semantic match found
+
+**Framework support:**
+- **Compose/Kotlin:** `Slider(`, `Switch(`, `Button(`, `Text(`, `TextField(`, `.clickable`, `.semantics`, `Modifier.`
+- **Android XML:** `<SeekBar`, `<Button`, `android:contentDescription`, `android:hint`, `android:text`
+- **SwiftUI:** `Slider(`, `Toggle(`, `Button(`, `Text(`, `.accessibilityLabel`, `.accessibilityHint`
+- **UIKit:** `UISlider`, `UIButton`, `UILabel`, `UITextField`, `accessibilityLabel`, `accessibilityTraits`
+- **React/JSX/TSX/HTML:** `<button`, `<input`, `<img`, `aria-label`, `aria-labelledby`, `role=`, `onClick`
+
+**Benefits:**
+- Comments anchor to the actual UI element causing the issue
+- Robust across multiple UI frameworks and languages
+- Backwards compatible (works with or without explicit anchor hints)
+- Falls back gracefully when no semantic match found
+
+### 6. Android XML Layout Support
 
 **Problem:** File filtering excluded ALL `.xml` files, blocking Android layout reviews.
 
@@ -126,7 +173,7 @@ if file_path.endswith('.xml'):
 - Excludes AndroidManifest.xml and resource XMLs (values, drawables, etc.)
 - Better platform coverage
 
-### 6. Batch Validation
+### 7. Batch Validation
 
 **Problem:** Model could return issues for files not in the current batch.
 
@@ -317,6 +364,35 @@ success = generate_and_write_sarif(issues, "report.sarif")
 1. Check that `extract_commentable_lines()` is being used
 2. Verify batch filtering is working
 3. Check test coverage with `test_diff_parser.py`
+
+**New:** The system now uses semantic anchor resolution to intelligently place comments on the correct UI element declaration/call site rather than just the nearest commentable line. This is handled automatically by `validate_issues_in_batch()` when passed the diff text.
+
+### Issue: Comment mis-anchoring on semantically wrong lines
+
+**Cause:** Model proposes line number that's valid but not the correct UI element
+
+**Solution:** The semantic anchor resolver (introduced in this release) automatically handles this:
+
+1. **How it works:**
+   - Extracts anchor candidates from issue metadata (title, description, WCAG SC)
+   - Searches for UI element patterns (e.g., `Slider(`, `<button`, `UIButton`) in commentable lines
+   - Resolves to the closest matching UI element within 20 lines of the proposed line
+   - Falls back to nearest commentable line if no semantic match found
+
+2. **Supported frameworks:**
+   - Android Compose/Kotlin: `Slider(`, `Button(`, `Text(`, `TextField(`, `.clickable`, `.semantics`
+   - Android XML: `<SeekBar`, `<Button`, `android:contentDescription`, `android:hint`
+   - iOS SwiftUI: `Slider(`, `Toggle(`, `Button(`, `.accessibilityLabel`
+   - iOS UIKit: `UISlider`, `UIButton`, `accessibilityLabel`
+   - Web React/JSX/TSX/HTML: `<button`, `<input`, `aria-label`, `onClick`
+
+3. **Verification:**
+   - Check logs for "semantic anchor" adjustment messages
+   - Run tests: `pytest tests/test_semantic_anchor_resolver.py -v`
+
+4. **Customization:**
+   - Add patterns to `SemanticAnchorResolver` class in `app/semantic_anchor_resolver.py`
+   - Adjust `max_distance` parameter in `validate_issues_in_batch()` call
 
 ### Issue: Duplicate comments
 

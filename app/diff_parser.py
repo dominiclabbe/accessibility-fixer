@@ -269,21 +269,35 @@ class DiffParser:
 def validate_issues_in_batch(
     issues: List[Dict],
     batch_files: List[str],
-    commentable_lines: Dict[str, List[int]]
+    commentable_lines: Dict[str, List[int]],
+    diff_text: Optional[str] = None
 ) -> List[Dict]:
     """
     Validate and adjust issues to ensure they're in the batch and on commentable lines.
+
+    Uses semantic anchor resolution to find the correct UI element declaration/call site
+    before falling back to nearest commentable line.
 
     Args:
         issues: List of issues from model
         batch_files: List of files in current batch
         commentable_lines: Dict of file -> commentable line numbers
+        diff_text: Optional unified diff text for semantic anchor resolution
 
     Returns:
         List of validated issues (may be adjusted or filtered)
     """
+    from app.semantic_anchor_resolver import SemanticAnchorResolver
+
     validated = []
     batch_file_set = set(batch_files)
+
+    # Extract line texts for semantic resolution if diff provided
+    line_texts = {}
+    if diff_text:
+        line_texts = SemanticAnchorResolver.extract_commentable_line_texts(
+            diff_text, commentable_lines
+        )
 
     for issue in issues:
         file_path = issue.get('file', '')
@@ -303,14 +317,29 @@ def validate_issues_in_batch(
         if file_path in commentable_lines:
             file_commentable = commentable_lines[file_path]
             if line not in file_commentable:
-                # Try to adjust to nearest commentable line
-                nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
-                if nearest:
-                    print(f"  Adjusted {file_path}:{line} -> {nearest} (nearest commentable)")
-                    issue['line'] = nearest
+                # Try semantic anchor resolution first
+                resolved_line = None
+                if diff_text and file_path in line_texts:
+                    resolved_line = SemanticAnchorResolver.resolve_issue_line(
+                        issue,
+                        file_path,
+                        file_commentable,
+                        line_texts[file_path],
+                        max_distance=20
+                    )
+
+                if resolved_line:
+                    print(f"  Adjusted {file_path}:{line} -> {resolved_line} (semantic anchor)")
+                    issue['line'] = resolved_line
                 else:
-                    print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
-                    continue
+                    # Fall back to nearest commentable line
+                    nearest = DiffParser.find_nearest_commentable_line(line, file_commentable)
+                    if nearest:
+                        print(f"  Adjusted {file_path}:{line} -> {nearest} (nearest commentable)")
+                        issue['line'] = nearest
+                    else:
+                        print(f"⚠️  Dropping issue for {file_path}:{line} - no commentable line nearby")
+                        continue
 
         validated.append(issue)
 
