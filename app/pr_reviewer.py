@@ -290,6 +290,12 @@ class PRReviewer:
             "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
             'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
             "",
+            "OPTIONAL field (highly recommended for accurate inline comment placement):",
+            '- anchor_text: An exact substring/line from the diff that identifies WHERE to place the comment.',
+            "  This should be the EXACT code line to comment on (e.g., 'Slider(', 'Toggle(\"Enable\", isOn:', '<input type=\"range\"', 'android:contentDescription=', '.clickable {', '<Button').",
+            "  Choose the specific UI call/declaration line and ensure it exists in the diff shown above.",
+            "  If provided, this helps ensure the comment appears at the precise UI element line.",
+            "",
             "Rules:",
             "- Report issues ONLY in the CHANGED code shown in this batch diff.",
         ])
@@ -458,6 +464,9 @@ class PRReviewer:
         """
         Compute a stable fingerprint for an issue.
 
+        Includes anchor signature derived from resolved anchor text or matched line
+        to improve dedupe accuracy and prevent rerun duplicates.
+
         Args:
             issue: Issue dict
 
@@ -485,8 +494,24 @@ class PRReviewer:
         # Truncate title to first 50 chars for fingerprint
         title_key = title[:50]
         
-        # Build fingerprint
-        fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
+        # Add anchor signature if available
+        # This improves dedupe by including the actual code line that was matched
+        anchor_sig = ""
+        if issue.get("_anchor_matched_text"):
+            # Use matched text from anchor resolution
+            matched = str(issue.get("_anchor_matched_text", "")).strip()
+            # Normalize: remove whitespace, lowercase, take first 40 chars
+            anchor_sig = "".join(matched.split()).lower()[:40]
+        elif issue.get("anchor_text"):
+            # Use explicit anchor_text from model
+            anchor = str(issue.get("anchor_text", "")).strip()
+            anchor_sig = "".join(anchor.split()).lower()[:40]
+        
+        # Build fingerprint with anchor signature if available
+        if anchor_sig:
+            fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}|{anchor_sig}"
+        else:
+            fingerprint_str = f"{file_path}|{line_bucket}|{wcag_sc}|{title_key}"
         
         # Hash for consistent length
         return hashlib.md5(fingerprint_str.encode()).hexdigest()

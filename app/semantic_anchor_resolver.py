@@ -15,6 +15,7 @@ Supports:
 
 import re
 from typing import Dict, List, Optional, Tuple
+from pathlib import Path
 
 
 class SemanticAnchorResolver:
@@ -163,7 +164,7 @@ class SemanticAnchorResolver:
         return line_texts
 
     @staticmethod
-    def extract_anchor_candidates(issue: Dict) -> List[str]:
+    def extract_anchor_candidates(issue: Dict, file_extension: Optional[str] = None) -> List[str]:
         """
         Extract anchor text candidates from issue metadata.
 
@@ -171,16 +172,18 @@ class SemanticAnchorResolver:
         - issue.get('anchor_text') or issue.get('anchor')
         - Keywords in title/description
         - WCAG SC specific patterns
+        - File extension-based framework detection
 
         Args:
             issue: Issue dict
+            file_extension: Optional file extension (e.g., '.kt', '.swift', '.tsx') for framework-specific inference
 
         Returns:
             List of anchor text candidates (e.g., ['Slider(', 'slider'])
         """
         candidates = []
 
-        # 1. Check for explicit anchor field (future-proofing)
+        # 1. Check for explicit anchor field (highest priority)
         explicit_anchor = issue.get('anchor_text') or issue.get('anchor')
         if explicit_anchor:
             candidates.append(str(explicit_anchor))
@@ -204,7 +207,148 @@ class SemanticAnchorResolver:
             candidates.append(f'{element_name}(')  # Function call
             candidates.append(f'<{element_name}')  # XML/HTML tag
 
+        # 4. Add framework-specific patterns based on file extension
+        if file_extension:
+            ext = file_extension.lower()
+            # Compose/Kotlin
+            if ext in ['.kt', '.kts']:
+                candidates.extend(SemanticAnchorResolver.COMPOSE_PATTERNS)
+            # Android XML
+            elif ext == '.xml':
+                candidates.extend(SemanticAnchorResolver.ANDROID_XML_PATTERNS)
+            # SwiftUI/Swift
+            elif ext == '.swift':
+                candidates.extend(SemanticAnchorResolver.SWIFTUI_PATTERNS)
+                candidates.extend(SemanticAnchorResolver.UIKIT_PATTERNS)
+            # React/Web
+            elif ext in ['.tsx', '.jsx', '.ts', '.js', '.html', '.css']:
+                candidates.extend(SemanticAnchorResolver.REACT_WEB_PATTERNS)
+
         return candidates
+
+    @staticmethod
+    def resolve_anchor_line(
+        issue: Dict,
+        right_line_to_text: Dict[int, str],
+        fallback_line: Optional[int] = None,
+        file_extension: Optional[str] = None,
+        debug: bool = False
+    ) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Resolve issue anchor to exact line using diff-grounded algorithm.
+
+        This is the primary deterministic anchoring function that implements:
+        a) If issue.anchor_text exists: search for it in right_line_to_text
+        b) If missing: infer candidates from issue metadata and file extension
+        c) If still no match: return None (caller should use fallback)
+
+        When multiple matches found, chooses closest to issue.line if provided,
+        otherwise closest to fallback_line, or first match in line-number order.
+
+        Args:
+            issue: Issue dict with 'line', 'title', 'description', optionally 'anchor_text'
+            right_line_to_text: Dict mapping commentable RIGHT-side line numbers to their text
+            fallback_line: Optional fallback line number for tie-breaking
+            file_extension: Optional file extension for framework inference
+            debug: If True, print debug information
+
+        Returns:
+            Tuple of (resolved_line_number, matched_text) or (None, None) if no match
+        """
+        if not right_line_to_text:
+            if debug:
+                print("  [anchor] No line texts available")
+            return None, None
+
+        # Step 1: Get anchor text from issue or infer candidates
+        explicit_anchor = issue.get('anchor_text') or issue.get('anchor')
+        
+        if explicit_anchor:
+            # Use explicit anchor_text
+            anchor_candidates = [str(explicit_anchor)]
+            if debug:
+                print(f"  [anchor] Using explicit anchor_text: {explicit_anchor}")
+        else:
+            # Infer candidates from issue metadata
+            anchor_candidates = SemanticAnchorResolver.extract_anchor_candidates(issue, file_extension)
+            if debug:
+                print(f"  [anchor] Inferred {len(anchor_candidates)} candidates from issue metadata")
+
+        if not anchor_candidates:
+            if debug:
+                print("  [anchor] No anchor candidates found")
+            return None, None
+
+        # Step 2: Search for candidates in right_line_to_text
+        matches = []  # List of (line_num, matched_text, candidate_pattern)
+        
+        for line_num, line_text in right_line_to_text.items():
+            if not line_text:
+                continue
+            
+            for candidate in anchor_candidates:
+                # Check if candidate is a regex pattern
+                is_regex_pattern = any(char in candidate for char in [r'\b', r'\s', r'\(', r'[', r'^', r'$', r'.', r'*'])
+                
+                try:
+                    if is_regex_pattern:
+                        # Use as regex pattern
+                        if re.search(candidate, line_text):
+                            matches.append((line_num, line_text.strip(), candidate))
+                            break
+                        # Try case-insensitive for keyword patterns
+                        elif re.search(candidate, line_text, re.IGNORECASE):
+                            matches.append((line_num, line_text.strip(), candidate))
+                            break
+                    else:
+                        # Try exact substring match (case-sensitive)
+                        if candidate in line_text:
+                            matches.append((line_num, line_text.strip(), candidate))
+                            break
+                        # Try case-insensitive substring match
+                        elif candidate.lower() in line_text.lower():
+                            matches.append((line_num, line_text.strip(), candidate))
+                            break
+                except re.error:
+                    # Invalid regex, skip
+                    continue
+
+        if not matches:
+            if debug:
+                print(f"  [anchor] No matches found for {len(anchor_candidates)} candidates")
+            return None, None
+
+        if debug:
+            print(f"  [anchor] Found {len(matches)} matches")
+
+        # Step 3: Choose best match based on proximity
+        if len(matches) == 1:
+            resolved_line, matched_text, _ = matches[0]
+            if debug:
+                print(f"  [anchor] Single match at line {resolved_line}: {matched_text[:60]}")
+            return resolved_line, matched_text
+
+        # Multiple matches - choose closest to proposed line or fallback
+        reference_line = issue.get('line', 0) or fallback_line or 0
+        
+        if reference_line > 0:
+            # Sort by distance from reference line
+            matches_with_distance = [
+                (line, text, abs(line - reference_line), pattern)
+                for line, text, pattern in matches
+            ]
+            matches_with_distance.sort(key=lambda x: x[2])  # Sort by distance
+            resolved_line, matched_text, _, _ = matches_with_distance[0]
+            if debug:
+                print(f"  [anchor] Multiple matches, chose line {resolved_line} (closest to {reference_line}): {matched_text[:60]}")
+        else:
+            # No reference line, choose first match in line order
+            matches.sort(key=lambda x: x[0])  # Sort by line number
+            resolved_line, matched_text, _ = matches[0]
+            if debug:
+                print(f"  [anchor] Multiple matches, chose first at line {resolved_line}: {matched_text[:60]}")
+
+        return resolved_line, matched_text
 
     @staticmethod
     def resolve_issue_line(
