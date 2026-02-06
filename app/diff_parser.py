@@ -21,6 +21,23 @@ class DiffParser:
     """Parses unified diffs and provides line mapping utilities."""
 
     @staticmethod
+    def _normalize_diff(diff_text: str) -> str:
+        """
+        Normalize diff text to handle CRLF/newline issues.
+        
+        Args:
+            diff_text: Raw diff text
+            
+        Returns:
+            Normalized diff text with consistent line endings
+        """
+        # Replace CRLF with LF
+        diff_text = diff_text.replace("\r\n", "\n")
+        # Strip any remaining standalone CR characters
+        diff_text = diff_text.replace("\r", "")
+        return diff_text
+
+    @staticmethod
     def parse_diff(diff_text: str) -> Dict[str, str]:
         """
         Parse unified diff into per-file sections.
@@ -31,6 +48,9 @@ class DiffParser:
         Returns:
             Dict mapping file paths to their diff sections
         """
+        # Normalize diff text to handle CRLF issues
+        diff_text = DiffParser._normalize_diff(diff_text)
+        
         file_diffs = {}
         current_file = None
         current_diff_lines = []
@@ -46,7 +66,9 @@ class DiffParser:
                     file_diffs[current_file] = "\n".join(current_diff_lines)
 
                 # Extract file path from "a/..." or "b/..."
-                match = re.search(r"b/(.+)$", line)
+                # Match "b/" followed by path, stopping at whitespace to avoid line-bleed
+                # Use negative lookbehind to skip "a/" paths
+                match = re.search(r"\sb/(\S+)", line)
                 if match:
                     current_file = match.group(1)
                     current_diff_lines = [line]
@@ -79,6 +101,9 @@ class DiffParser:
         """
         if not file_paths:
             return ""
+
+        # Normalize diff text to handle CRLF issues
+        full_diff = DiffParser._normalize_diff(full_diff)
 
         debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in [
             "1",
@@ -175,6 +200,9 @@ class DiffParser:
         Returns:
             Dict mapping file paths to lists of commentable line numbers
         """
+        # Normalize diff text to handle CRLF issues
+        diff_text = DiffParser._normalize_diff(diff_text)
+        
         commentable = {}
         current_file = None
         current_line = 0
@@ -182,8 +210,11 @@ class DiffParser:
 
         for line in diff_text.split("\n"):
             # Match file header: +++ b/path/to/file
+            # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
-                current_file = line[6:]  # Skip '+++ b/'
+                path_part = line[6:]  # Skip '+++ b/'
+                # Split on whitespace and take first token
+                current_file = path_part.split()[0] if path_part else ""
                 commentable[current_file] = []
                 in_hunk = False
                 continue
@@ -228,13 +259,18 @@ class DiffParser:
         Returns:
             Dict mapping file paths to list of (start_line, end_line) tuples
         """
+        # Normalize diff text to handle CRLF issues
+        diff_text = DiffParser._normalize_diff(diff_text)
+        
         ranges = {}
         current_file = None
 
         for line in diff_text.split("\n"):
             # Match file header
+            # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
-                current_file = line[6:]
+                path_part = line[6:]
+                current_file = path_part.split()[0] if path_part else ""
                 ranges[current_file] = []
                 continue
 
@@ -301,6 +337,9 @@ class DiffParser:
         Returns:
             Code snippet as string (empty if not found)
         """
+        # Normalize diff text to handle CRLF issues
+        diff_text = DiffParser._normalize_diff(diff_text)
+        
         current_file = None
         current_line = 0
         in_hunk = False
@@ -308,8 +347,10 @@ class DiffParser:
 
         for line in diff_text.split("\n"):
             # Match file header
+            # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
-                current_file = line[6:]
+                path_part = line[6:]
+                current_file = path_part.split()[0] if path_part else ""
                 in_hunk = False
                 current_line = 0
                 lines_buffer = []

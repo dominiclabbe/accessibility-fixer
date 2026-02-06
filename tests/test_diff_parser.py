@@ -464,6 +464,114 @@ index 1234567..abcdefg 100644
 class TestPathNormalization:
     """Tests for path normalization in filter_diff_for_files."""
 
+    def test_crlf_normalization_in_parse_diff(self):
+        """Test that CRLF line endings are normalized properly."""
+        # Diff with CRLF line endings
+        diff_with_crlf = (
+            "diff --git a/test.py b/test.py\r\n"
+            "index 1234567..abcdefg 100644\r\n"
+            "--- a/test.py\r\n"
+            "+++ b/test.py\r\n"
+            "@@ -1,2 +1,3 @@\r\n"
+            " def hello():\r\n"
+            "+    print('world')\r\n"
+            "     pass\r\n"
+        )
+        parser = DiffParser()
+        result = parser.parse_diff(diff_with_crlf)
+        
+        # Should successfully parse file
+        assert "test.py" in result
+        assert "def hello():" in result["test.py"]
+        # Should not have \r in the result
+        assert "\r" not in result["test.py"]
+
+    def test_corrupted_path_with_space_and_extra_path(self):
+        """Test handling of corrupted path like 'src/Main.tsx b/web/src/Main.tsx'."""
+        # This simulates the observed bug where path extraction captures too much
+        diff = (
+            "diff --git a/src/components/Main.tsx b/web/src/components/Main.tsx\n"
+            "index 1234567..abcdefg 100644\n"
+            "--- a/src/components/Main.tsx\n"
+            "+++ b/web/src/components/Main.tsx\n"
+            "@@ -1,3 +1,5 @@\n"
+            "+import React from 'react';\n"
+            "+\n"
+            " export function Main() {\n"
+            "   return <div>Main</div>;\n"
+            " }\n"
+        )
+        parser = DiffParser()
+        result = parser.parse_diff(diff)
+        
+        # Should extract only the first path after "b/" (stopping at whitespace)
+        assert "web/src/components/Main.tsx" in result
+        # Should NOT have corrupted path
+        assert "src/components/Main.tsx b/web/src/components/Main.tsx" not in result
+
+    def test_path_with_trailing_whitespace(self):
+        """Test that trailing whitespace in paths is handled."""
+        diff = (
+            "diff --git a/test.py b/test.py   \n"
+            "index 1234567..abcdefg 100644\n"
+            "--- a/test.py\n"
+            "+++ b/test.py   \n"
+            "@@ -1,2 +1,3 @@\n"
+            " line1\n"
+            "+line2\n"
+        )
+        parser = DiffParser()
+        
+        # Test parse_diff
+        result = parser.parse_diff(diff)
+        assert "test.py" in result
+        
+        # Test extract_commentable_lines
+        commentable = parser.extract_commentable_lines(diff)
+        assert "test.py" in commentable
+        assert len(commentable["test.py"]) > 0
+
+    def test_mixed_line_endings(self):
+        """Test handling of mixed line endings (LF and CRLF)."""
+        diff = (
+            "diff --git a/test.py b/test.py\r\n"
+            "index 1234567..abcdefg 100644\n"  # LF here
+            "--- a/test.py\r\n"
+            "+++ b/test.py\n"  # LF here
+            "@@ -1,2 +1,3 @@\r\n"
+            " line1\n"
+            "+line2\r\n"
+            " line3\n"
+        )
+        parser = DiffParser()
+        
+        # Should normalize and parse correctly
+        result = parser.parse_diff(diff)
+        assert "test.py" in result
+        
+        commentable = parser.extract_commentable_lines(diff)
+        assert "test.py" in commentable
+        assert 2 in commentable["test.py"]  # The added line
+
+    def test_extract_commentable_lines_with_path_corruption(self):
+        """Test extract_commentable_lines with potential path corruption."""
+        diff = (
+            "diff --git a/test.tsx b/test.tsx\n"
+            "index 1234567..abcdefg 100644\n"
+            "--- a/test.tsx\n"
+            "+++ b/test.tsx   extra-garbage\n"  # Trailing garbage
+            "@@ -1,2 +1,3 @@\n"
+            " function test() {\n"
+            "+  console.log('hi');\n"
+            " }\n"
+        )
+        parser = DiffParser()
+        commentable = parser.extract_commentable_lines(diff)
+        
+        # Should extract clean path
+        assert "test.tsx" in commentable
+        assert "test.tsx   extra-garbage" not in commentable
+
     def test_suffix_match_when_diff_has_shorter_path(self):
         """Test suffix matching when diff has '+++ b/src/components/Main.tsx'
         but requested file is 'web/src/components/Main.tsx'."""
