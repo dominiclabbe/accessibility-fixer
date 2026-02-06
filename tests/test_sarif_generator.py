@@ -31,7 +31,7 @@ class TestSARIFGenerator:
             {
                 "file": "app/test.py",
                 "line": 42,
-                "severity": "High",
+                "severity": "major",
                 "wcag_sc": "1.1.1",
                 "wcag_level": "A",
                 "title": "Missing alt text",
@@ -54,7 +54,7 @@ class TestSARIFGenerator:
 
         result = results[0]
         assert result["ruleId"] == "wcag-1-1-1"
-        assert result["level"] == "error"  # High -> error
+        assert result["level"] == "error"  # major -> error
         assert result["message"]["text"]
         assert "Image lacks alternative text" in result["message"]["text"]
 
@@ -64,7 +64,7 @@ class TestSARIFGenerator:
         assert location["region"]["startLine"] == 42
 
         # Check properties
-        assert result["properties"]["severity"] == "High"
+        assert result["properties"]["severity"] == "major"
         assert result["properties"]["wcag_sc"] == "1.1.1"
 
     def test_generate_sarif_multiple_issues(self):
@@ -73,7 +73,7 @@ class TestSARIFGenerator:
             {
                 "file": "app/page1.html",
                 "line": 10,
-                "severity": "Critical",
+                "severity": "critical",
                 "wcag_sc": "1.1.1",
                 "wcag_level": "A",
                 "title": "Missing alt text",
@@ -82,11 +82,11 @@ class TestSARIFGenerator:
             {
                 "file": "app/page2.html",
                 "line": 20,
-                "severity": "Medium",
+                "severity": "minor",
                 "wcag_sc": "2.4.6",
                 "wcag_level": "AA",
                 "title": "Poor heading structure",
-                "description": "Medium issue",
+                "description": "Minor issue",
             },
         ]
 
@@ -98,19 +98,19 @@ class TestSARIFGenerator:
 
         # Check first result
         assert results[0]["ruleId"] == "wcag-1-1-1"
-        assert results[0]["level"] == "error"  # Critical -> error
+        assert results[0]["level"] == "error"  # critical -> error
 
         # Check second result
         assert results[1]["ruleId"] == "wcag-2-4-6"
-        assert results[1]["level"] == "warning"  # Medium -> warning
+        assert results[1]["level"] == "warning"  # minor -> warning
 
     def test_severity_mapping(self):
         """Test severity to SARIF level mapping."""
         test_cases = [
-            ("Critical", "error"),
-            ("High", "error"),
-            ("Medium", "warning"),
-            ("Low", "note"),
+            ("critical", "error"),
+            ("major", "error"),
+            ("minor", "warning"),
+            ("info", "note"),
         ]
 
         for severity, expected_level in test_cases:
