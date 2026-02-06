@@ -105,7 +105,13 @@ class PRReviewer:
         else:
             web_extensions = set()
 
+        # DEBUG_WEB_REVIEW: Track processed batches
+        processed_batches = 0
+
         for batch_idx, file_batch in enumerate(batches):
+            # DEBUG_WEB_REVIEW: Log batch BEGIN
+            if debug_web_review:
+                logger.info(f"[DEBUG_WEB_REVIEW] === BEGIN Batch {batch_idx + 1}/{len(batches)} ===")
             print(f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)...")
 
             # Get diff for this batch using proper diff parser
@@ -250,18 +256,46 @@ class PRReviewer:
 
             all_issues.extend(validated_issues)
 
+            # DEBUG_WEB_REVIEW: Log batch END
+            if debug_web_review:
+                logger.info(f"[DEBUG_WEB_REVIEW] === END Batch {batch_idx + 1}/{len(batches)} ===")
+                processed_batches += 1
+
             # Post comments progressively every N batches
             if on_batch_complete and len(all_issues) > 0 and (batch_idx + 1) % batch_size_for_posting == 0:
                 deduped = self._dedupe_issues(all_issues)
                 if deduped:
-                    on_batch_complete(deduped)
+                    # DEBUG_WEB_REVIEW: Wrap callback in try/except for exception tracing
+                    if debug_web_review:
+                        try:
+                            on_batch_complete(deduped)
+                        except Exception:
+                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1}):")
+                            raise
+                    else:
+                        on_batch_complete(deduped)
                     all_issues = []
+
+        # DEBUG_WEB_REVIEW: Log summary after batch loop
+        if debug_web_review:
+            logger.info(f"[DEBUG_WEB_REVIEW] Batch loop complete:")
+            logger.info(f"  Processed batches: {processed_batches}")
+            logger.info(f"  Total batches: {len(batches)}")
+            logger.info(f"  Remaining buffer size: {len(all_issues)}")
 
         # Post any remaining issues
         if on_batch_complete and len(all_issues) > 0:
             deduped = self._dedupe_issues(all_issues)
             if deduped:
-                on_batch_complete(deduped)
+                # DEBUG_WEB_REVIEW: Wrap callback in try/except for exception tracing
+                if debug_web_review:
+                    try:
+                        on_batch_complete(deduped)
+                    except Exception:
+                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final):")
+                        raise
+                else:
+                    on_batch_complete(deduped)
             return []
 
         return self._dedupe_issues(all_issues)
