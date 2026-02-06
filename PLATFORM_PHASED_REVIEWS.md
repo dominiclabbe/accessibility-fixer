@@ -56,6 +56,27 @@ While phases are independent, comment deduplication remains global:
 - The `on_batch_complete` callback continues to work across phases
 - Final status is based on all issues found across all phases
 
+### Review Summary Strategy
+
+To provide a clean user experience on multi-platform PRs, the review summaries are posted strategically:
+
+**For Multi-Platform PRs (2+ platforms):**
+- **Intermediate Reviews** (during phases): Posted with inline comments but only show progress message:
+  - Example: `⏳ Accessibility review in progress… Phase 2/4`
+  - This allows inline comments to appear quickly without cluttering the PR with multiple summary reviews
+- **Final Review** (after all phases): Posted as a comprehensive summary without inline comments:
+  - Shows complete "# Accessibility Review Summary" with total counts across all platforms
+  - Provides single source of truth for all issues found
+
+**For Single-Platform PRs:**
+- Full summary is posted immediately with inline comments (no change from previous behavior)
+- Example: PR with only Android files shows full summary right away
+
+**Benefits:**
+- Inline comments appear progressively as batches complete (fast feedback)
+- Only ONE final comprehensive summary appears on the PR (clean UI)
+- No duplicate "# Accessibility Review Summary" headers
+
 ## Example Flow
 
 ### Multi-Platform PR
