@@ -537,6 +537,12 @@ def handle_pull_request(payload: dict):
             f"Found {len(review_threads)} review threads (for resolution validation)"
         )
 
+        # Track phase state for multi-platform reviews
+        phase_state = {"current_phase": 0, "total_phases": len(platforms_in_order)}
+        logger.info(
+            f"Found {len(review_threads)} review threads (for resolution validation)"
+        )
+
         def is_near_existing_comment(
             file_path: str, line: int, issue: Dict = None, range_threshold: int = 5
         ) -> tuple:
@@ -794,17 +800,14 @@ def handle_pull_request(payload: dict):
 
             # Post intermediate reviews with minimal body (not final)
             # Multiple platforms means we're in a phased review
-            is_final_review = len(platforms_in_order) == 1
+            is_final_review = phase_state["total_phases"] == 1
             current_phase_num = None
             total_phases_num = None
 
             if not is_final_review:
-                # Determine which phase we're currently in by checking the batch
-                # This is called during a phase, so we use the current phase_idx
-                # We'll need to capture this from the outer scope
-                # For now, we mark all intermediate batches as not final
-                current_phase_num = getattr(post_batch_comments, "current_phase", None)
-                total_phases_num = len(platforms_in_order)
+                # Get current phase from phase state
+                current_phase_num = phase_state["current_phase"]
+                total_phases_num = phase_state["total_phases"]
 
             comment_poster.post_review_comments(
                 repo_owner,
@@ -829,8 +832,8 @@ def handle_pull_request(payload: dict):
             )
             logger.info(f"{'='*80}")
 
-            # Set current phase on callback for phase tracking in reviews
-            post_batch_comments.current_phase = phase_idx
+            # Update phase state for callback
+            phase_state["current_phase"] = phase_idx
 
             # Get files for this platform
             platform_files = platform_buckets[platform]
