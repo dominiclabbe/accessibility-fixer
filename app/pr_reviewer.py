@@ -98,9 +98,14 @@ class PRReviewer:
         batch_size_for_posting = 5  # Post every 5 batches
 
         # DEBUG_WEB_REVIEW: Track web files in batches
-        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in [
+            "1",
+            "true",
+            "yes",
+        ]
         if debug_web_review:
             from app.constants import WEB_EXTENSIONS
+
             web_extensions = WEB_EXTENSIONS
             # DEBUG_WEB_REVIEW: Track processed batches
             processed_batches = 0
@@ -110,19 +115,48 @@ class PRReviewer:
         for batch_idx, file_batch in enumerate(batches):
             # DEBUG_WEB_REVIEW: Log batch BEGIN
             if debug_web_review:
-                logger.info(f"[DEBUG_WEB_REVIEW] === BEGIN Batch {batch_idx + 1}/{len(batches)} ===")
-            print(f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)...")
+                logger.info(
+                    f"[DEBUG_WEB_REVIEW] === BEGIN Batch {batch_idx + 1}/{len(batches)} ==="
+                )
+            print(
+                f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
+            )
 
             # Get diff for this batch using proper diff parser
             batch_diff = DiffParser.filter_diff_for_files(pr_diff, file_batch)
             if not batch_diff:
-                print(f"  No diff content for batch {batch_idx + 1}, skipping")
+                # DEBUG_WEB_REVIEW: Enhanced diagnostics when batch is skipped
+                if debug_web_review:
+                    # Extract all diff file paths from pr_diff
+                    import re
+
+                    diff_file_paths = re.findall(
+                        r"^\+\+\+ b/(.+)$", pr_diff, re.MULTILINE
+                    )
+
+                    logger.info(
+                        f"[DEBUG_WEB_REVIEW] No diff content for batch {batch_idx + 1}/{len(batches)} - skipping"
+                    )
+                    logger.info(
+                        f"[DEBUG_WEB_REVIEW]   Requested files in batch: {file_batch}"
+                    )
+                    logger.info(
+                        f"[DEBUG_WEB_REVIEW]   Total diff file headers found: {len(diff_file_paths)}"
+                    )
+                    logger.info(
+                        f"[DEBUG_WEB_REVIEW]   First 10 diff paths: {diff_file_paths[:10]}"
+                    )
+                else:
+                    print(f"  No diff content for batch {batch_idx + 1}, skipping")
                 continue
 
             # Truncate if too large
             original_diff_size = len(batch_diff)
             if len(batch_diff) > self.max_diff_chars:
-                batch_diff = batch_diff[: self.max_diff_chars] + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
+                batch_diff = (
+                    batch_diff[: self.max_diff_chars]
+                    + "\n\n# [TRUNCATED] Diff exceeded max characters.\n"
+                )
 
             # Extract commentable lines for validation
             commentable_lines = DiffParser.extract_commentable_lines(batch_diff)
@@ -130,14 +164,18 @@ class PRReviewer:
             # DEBUG_WEB_REVIEW: Log batch composition and commentable lines
             if debug_web_review:
                 web_files_in_batch = [
-                    f for f in file_batch
-                    if f.startswith("web/") or any(f.endswith(ext) for ext in web_extensions)
+                    f
+                    for f in file_batch
+                    if f.startswith("web/")
+                    or any(f.endswith(ext) for ext in web_extensions)
                 ]
 
                 logger.info(f"[DEBUG_WEB_REVIEW] Batch {batch_idx + 1}/{len(batches)}:")
                 logger.info(f"  Files in batch: {file_batch}")
                 logger.info(f"  Web files in batch: {web_files_in_batch}")
-                logger.info(f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})")
+                logger.info(
+                    f"  Diff size: {original_diff_size} chars (truncated: {len(batch_diff) < original_diff_size})"
+                )
 
                 for file_path in file_batch:
                     file_commentable = commentable_lines.get(file_path, [])
@@ -149,10 +187,14 @@ class PRReviewer:
                     logger.info(f"    Total commentable lines: {len(file_commentable)}")
                     if file_commentable:
                         try:
-                            logger.info(f"    Line range: {min(file_commentable)} - {max(file_commentable)}")
+                            logger.info(
+                                f"    Line range: {min(file_commentable)} - {max(file_commentable)}"
+                            )
                         except TypeError:
                             preview = ", ".join(map(str, file_commentable[:10]))
-                            logger.info(f"    Line range: n/a (non-numeric lines). Preview: [{preview}]")
+                            logger.info(
+                                f"    Line range: n/a (non-numeric lines). Preview: [{preview}]"
+                            )
                     else:
                         logger.info("    Line range: n/a (no commentable lines)")
 
@@ -174,8 +216,10 @@ class PRReviewer:
                 from pathlib import Path as _Path
 
                 web_files_in_batch = [
-                    f for f in file_batch
-                    if f.startswith("web/") or any(f.endswith(ext) for ext in web_extensions)
+                    f
+                    for f in file_batch
+                    if f.startswith("web/")
+                    or any(f.endswith(ext) for ext in web_extensions)
                 ]
                 web_file_set = set(web_files_in_batch)
                 web_basenames = {_Path(p).name for p in web_files_in_batch}
@@ -202,14 +246,25 @@ class PRReviewer:
                     if is_web_issue:
                         web_issue_count += 1
 
-                logger.info(f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):")
+                logger.info(
+                    f"[DEBUG_WEB_REVIEW] Raw issues from LLM (batch {batch_idx + 1}):"
+                )
                 logger.info(f"  Total raw issues: {len(raw_issues)}")
                 logger.info(f"  Non-dict items in raw_issues: {non_dict_count}")
                 logger.info("  Issues by file (as returned by model):")
                 for fp, count in issues_by_file.items():
-                    tag = "WEB" if (fp.startswith("web/") or any(fp.endswith(ext) for ext in web_extensions)) else "NON-WEB"
+                    tag = (
+                        "WEB"
+                        if (
+                            fp.startswith("web/")
+                            or any(fp.endswith(ext) for ext in web_extensions)
+                        )
+                        else "NON-WEB"
+                    )
                     logger.info(f"    - {fp} ({tag}): {count}")
-                logger.info(f"  Web issues (robust count): {web_issue_count}/{len(raw_issues)}")
+                logger.info(
+                    f"  Web issues (robust count): {web_issue_count}/{len(raw_issues)}"
+                )
 
             # Filter out "no issues" placeholders (guard for non-dict)
             filtered_raw_issues: List[Dict] = []
@@ -238,30 +293,46 @@ class PRReviewer:
             # DEBUG_WEB_REVIEW: Log summary after validation
             if debug_web_review:
                 web_normalized = sum(
-                    1 for issue in normalized_issues
-                    if _is_web_file(issue.get('file', ''))
+                    1
+                    for issue in normalized_issues
+                    if _is_web_file(issue.get("file", ""))
                 )
                 web_validated = sum(
-                    1 for issue in validated_issues
-                    if _is_web_file(issue.get('file', ''))
+                    1
+                    for issue in validated_issues
+                    if _is_web_file(issue.get("file", ""))
                 )
                 non_web_normalized = len(normalized_issues) - web_normalized
                 non_web_validated = len(validated_issues) - web_validated
 
-                logger.info(f"[DEBUG_WEB_REVIEW] Validation summary (batch {batch_idx + 1}):")
-                logger.info(f"  Normalized issues: {len(normalized_issues)} (web: {web_normalized}, non-web: {non_web_normalized})")
-                logger.info(f"  Validated issues: {len(validated_issues)} (web: {web_validated}, non-web: {non_web_validated})")
-                logger.info(f"  Dropped: {len(normalized_issues) - len(validated_issues)} (web: {web_normalized - web_validated}, non-web: {non_web_normalized - non_web_validated})")
+                logger.info(
+                    f"[DEBUG_WEB_REVIEW] Validation summary (batch {batch_idx + 1}):"
+                )
+                logger.info(
+                    f"  Normalized issues: {len(normalized_issues)} (web: {web_normalized}, non-web: {non_web_normalized})"
+                )
+                logger.info(
+                    f"  Validated issues: {len(validated_issues)} (web: {web_validated}, non-web: {non_web_validated})"
+                )
+                logger.info(
+                    f"  Dropped: {len(normalized_issues) - len(validated_issues)} (web: {web_normalized - web_validated}, non-web: {non_web_normalized - non_web_validated})"
+                )
 
             all_issues.extend(validated_issues)
 
             # DEBUG_WEB_REVIEW: Log batch END
             if debug_web_review:
-                logger.info(f"[DEBUG_WEB_REVIEW] === END Batch {batch_idx + 1}/{len(batches)} ===")
+                logger.info(
+                    f"[DEBUG_WEB_REVIEW] === END Batch {batch_idx + 1}/{len(batches)} ==="
+                )
                 processed_batches += 1
 
             # Post comments progressively every N batches
-            if on_batch_complete and len(all_issues) > 0 and (batch_idx + 1) % batch_size_for_posting == 0:
+            if (
+                on_batch_complete
+                and len(all_issues) > 0
+                and (batch_idx + 1) % batch_size_for_posting == 0
+            ):
                 deduped = self._dedupe_issues(all_issues)
                 if deduped:
                     # DEBUG_WEB_REVIEW: Wrap callback in try/except for exception tracing
@@ -269,7 +340,9 @@ class PRReviewer:
                         on_batch_complete(deduped)
                     except Exception:
                         if debug_web_review:
-                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1})")
+                            logger.exception(
+                                f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1})"
+                            )
                         raise
                     all_issues = []
 
@@ -289,7 +362,9 @@ class PRReviewer:
                     on_batch_complete(deduped)
                 except Exception:
                     if debug_web_review:
-                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final)")
+                        logger.exception(
+                            "[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final)"
+                        )
                     raise
             return []
 
@@ -616,9 +691,13 @@ class PRReviewer:
         """
         seen_fingerprints = set()
         out = []
-        
+
         # Track dedupe drops for DEBUG_WEB_REVIEW
-        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in [
+            "1",
+            "true",
+            "yes",
+        ]
         dedupe_drops = []
 
         for issue in issues:
@@ -632,15 +711,17 @@ class PRReviewer:
                 line = issue.get("line", 0)
                 title = issue.get("title", "")
                 print(f"  Skipping duplicate: {file_path}:{line} - {title[:50]}")
-                
+
                 if debug_web_review:
-                    dedupe_drops.append({
-                        "file": file_path,
-                        "line": line,
-                        "title": title[:60],
-                        "fingerprint": fingerprint,
-                        "reason": "duplicate fingerprint"
-                    })
+                    dedupe_drops.append(
+                        {
+                            "file": file_path,
+                            "line": line,
+                            "title": title[:60],
+                            "fingerprint": fingerprint,
+                            "reason": "duplicate fingerprint",
+                        }
+                    )
 
         # DEBUG_WEB_REVIEW: Log dedupe drops
         if debug_web_review and dedupe_drops:
