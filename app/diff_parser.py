@@ -184,7 +184,37 @@ class DiffParser:
             if matched_diff_path:
                 filtered_sections.append(parsed[matched_diff_path])
 
-        return "\n".join(filtered_sections)
+        result = "\n".join(filtered_sections)
+
+        # DEBUG_WEB_REVIEW: Log detailed diagnostics when result is empty for non-empty requested_files
+        if debug_web_review and not result and file_paths:
+            logger.info("[DEBUG_WEB_REVIEW] Empty diff result despite non-empty requested_files")
+            logger.info(f"  Requested files ({len(file_paths)}): {file_paths}")
+            logger.info(f"  Number of diff paths detected: {len(diff_paths)}")
+            logger.info(f"  First 15 diff paths: {diff_paths[:15]}")
+
+            # Basename matches: for each requested file, list any diff paths whose basename matches
+            logger.info("  Basename matches:")
+            for file_path in file_paths:
+                file_basename = os.path.basename(file_path)
+                basename_matches = [
+                    dp for dp in diff_paths if os.path.basename(dp) == file_basename
+                ]
+                if basename_matches:
+                    logger.info(f"    {file_path} -> {basename_matches}")
+                else:
+                    logger.info(f"    {file_path} -> (no basename matches)")
+
+            # difflib.get_close_matches for each requested file against diff paths (up to 5 matches)
+            logger.info("  Close matches (difflib):")
+            for file_path in file_paths:
+                close_matches = get_close_matches(file_path, diff_paths, n=5, cutoff=0.6)
+                if close_matches:
+                    logger.info(f"    {file_path} -> {close_matches}")
+                else:
+                    logger.info(f"    {file_path} -> (no close matches)")
+
+        return result
 
     @staticmethod
     def extract_commentable_lines(diff_text: str) -> Dict[str, List[int]]:

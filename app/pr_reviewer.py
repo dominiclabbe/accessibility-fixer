@@ -118,9 +118,9 @@ class PRReviewer:
                 logger.info(
                     f"[DEBUG_WEB_REVIEW] === BEGIN Batch {batch_idx + 1}/{len(batches)} ==="
                 )
-            print(
-                f"  Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
-            )
+                logger.info(
+                    f"[DEBUG_WEB_REVIEW] Reviewing batch {batch_idx + 1}/{len(batches)} ({len(file_batch)} files)..."
+                )
 
             # Get diff for this batch using proper diff parser
             batch_diff = DiffParser.filter_diff_for_files(pr_diff, file_batch)
@@ -146,8 +146,6 @@ class PRReviewer:
                     logger.info(
                         f"[DEBUG_WEB_REVIEW]   First 10 diff paths: {diff_file_paths[:10]}"
                     )
-                else:
-                    print(f"  No diff content for batch {batch_idx + 1}, skipping")
                 continue
 
             # Truncate if too large
