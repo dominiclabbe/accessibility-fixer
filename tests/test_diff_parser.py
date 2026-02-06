@@ -479,7 +479,7 @@ class TestPathNormalization:
         )
         parser = DiffParser()
         result = parser.parse_diff(diff_with_crlf)
-        
+
         # Should successfully parse file
         assert "test.py" in result
         assert "def hello():" in result["test.py"]
@@ -488,7 +488,7 @@ class TestPathNormalization:
 
     def test_corrupted_path_with_space_and_extra_path(self):
         """Test that we extract only the destination path from rename/move diffs.
-        
+
         When a file is renamed (e.g., src/Main.tsx -> web/src/Main.tsx), the diff
         header is 'diff --git a/src/Main.tsx b/web/src/Main.tsx'. Without proper
         parsing, we could incorrectly capture both paths as one (corruption).
@@ -509,7 +509,7 @@ class TestPathNormalization:
         )
         parser = DiffParser()
         result = parser.parse_diff(diff)
-        
+
         # Should extract only the destination path (after "b/")
         assert "web/src/components/Main.tsx" in result
         # Should NOT have corrupted path that includes both src and dest
@@ -527,11 +527,11 @@ class TestPathNormalization:
             "+line2\n"
         )
         parser = DiffParser()
-        
+
         # Test parse_diff
         result = parser.parse_diff(diff)
         assert "test.py" in result
-        
+
         # Test extract_commentable_lines
         commentable = parser.extract_commentable_lines(diff)
         assert "test.py" in commentable
@@ -550,11 +550,11 @@ class TestPathNormalization:
             " line3\n"
         )
         parser = DiffParser()
-        
+
         # Should normalize and parse correctly
         result = parser.parse_diff(diff)
         assert "test.py" in result
-        
+
         commentable = parser.extract_commentable_lines(diff)
         assert "test.py" in commentable
         assert 2 in commentable["test.py"]  # The added line
@@ -573,7 +573,7 @@ class TestPathNormalization:
         )
         parser = DiffParser()
         commentable = parser.extract_commentable_lines(diff)
-        
+
         # Should extract clean path
         assert "test.tsx" in commentable
         assert "test.tsx   extra-garbage" not in commentable

@@ -24,10 +24,10 @@ class DiffParser:
     def _normalize_diff(diff_text: str) -> str:
         """
         Normalize diff text to handle CRLF/newline issues.
-        
+
         Args:
             diff_text: Raw diff text
-            
+
         Returns:
             Normalized diff text with consistent line endings
         """
@@ -50,7 +50,7 @@ class DiffParser:
         """
         # Normalize diff text to handle CRLF issues
         diff_text = DiffParser._normalize_diff(diff_text)
-        
+
         file_diffs = {}
         current_file = None
         current_diff_lines = []
@@ -203,7 +203,7 @@ class DiffParser:
         """
         # Normalize diff text to handle CRLF issues
         diff_text = DiffParser._normalize_diff(diff_text)
-        
+
         commentable = {}
         current_file = None
         current_line = 0
@@ -263,7 +263,7 @@ class DiffParser:
         """
         # Normalize diff text to handle CRLF issues
         diff_text = DiffParser._normalize_diff(diff_text)
-        
+
         ranges = {}
         current_file = None
 
@@ -342,7 +342,7 @@ class DiffParser:
         """
         # Normalize diff text to handle CRLF issues
         diff_text = DiffParser._normalize_diff(diff_text)
-        
+
         current_file = None
         current_line = 0
         in_hunk = False
