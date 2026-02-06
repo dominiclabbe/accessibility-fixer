@@ -13,12 +13,12 @@ from typing import List, Dict, Optional
 def get_app_version() -> str:
     """
     Get application version/git SHA for debug footer.
-    
+
     Priority:
     1. ACCESSIBILITY_FIXER_VERSION env var
     2. git rev-parse --short HEAD
     3. "unknown" fallback
-    
+
     Returns:
         Short git SHA or version string
     """
@@ -26,12 +26,12 @@ def get_app_version() -> str:
     env_version = os.getenv("ACCESSIBILITY_FIXER_VERSION")
     if env_version:
         return env_version
-    
+
     # Try git command
     try:
         # Get repository root (two levels up from this file)
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        
+
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
@@ -43,34 +43,34 @@ def get_app_version() -> str:
             return result.stdout.strip()
     except Exception:
         pass
-    
+
     return "unknown"
 
 
 def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
     """
     Generate debug footer for review summary.
-    
+
     Args:
         reviewer_config: Optional dict with reviewer configuration
                         (model, files_per_batch, max_diff_chars, etc.)
-    
+
     Returns:
         Debug footer string in format:
         ---
         _debug: accessibility-fixer@<sha> model=<model> files_per_batch=<n> ..._
     """
     version = get_app_version()
-    
+
     parts = [f"accessibility-fixer@{version}"]
-    
+
     if reviewer_config:
         # Add model info
         model = reviewer_config.get("model")
         if model is None:
             model = os.getenv("SCOUT_MODEL", "unknown")
         parts.append(f"model={model}")
-        
+
         # Add base URL/provider if available
         base_url = reviewer_config.get("base_url")
         if base_url is None:
@@ -87,30 +87,34 @@ def get_debug_footer(reviewer_config: Optional[Dict] = None) -> str:
             except Exception:
                 # Skip provider if URL parsing fails
                 pass
-        
+
         # Add key runtime settings
         files_per_batch = reviewer_config.get("files_per_batch")
         if files_per_batch is None:
             files_per_batch = os.getenv("SCOUT_FILES_PER_BATCH", "1")
         parts.append(f"files_per_batch={files_per_batch}")
-        
+
         max_diff_chars = reviewer_config.get("max_diff_chars")
         if max_diff_chars is None:
             max_diff_chars = os.getenv("SCOUT_MAX_DIFF_CHARS", "180000")
         parts.append(f"max_diff_chars={max_diff_chars}")
-        
+
         # Check if SARIF is enabled
         sarif_enabled = os.getenv("OUTPUT_SARIF", "").lower() in ["1", "true", "yes"]
         if sarif_enabled:
             parts.append("sarif=enabled")
-    
+
     return f"\n\n---\n_debug: {' '.join(parts)}_"
 
 
 class CommentPoster:
     """Posts accessibility issues as PR review comments."""
 
-    def __init__(self, github_api_url: str = "https://api.github.com", reviewer_config: Optional[Dict] = None):
+    def __init__(
+        self,
+        github_api_url: str = "https://api.github.com",
+        reviewer_config: Optional[Dict] = None,
+    ):
         """
         Initialize comment poster.
 
@@ -174,29 +178,33 @@ class CommentPoster:
         for issue in issues:
             comment = self._format_inline_comment(issue)
             if comment:
-                location_key = (comment['path'], comment['line'])
-                
+                location_key = (comment["path"], comment["line"])
+
                 # Extract title from issue for matching
-                issue_title = issue.get('title', '')[:50].strip()
+                issue_title = issue.get("title", "")[:50].strip()
 
                 # Check if similar comment already exists
                 # Match by location AND title to handle anchor-based duplicates
                 is_duplicate = False
                 for existing_path, existing_line, existing_title in existing_locations:
-                    if existing_path == comment['path']:
+                    if existing_path == comment["path"]:
                         # Check if line numbers are close (within 5 lines) and titles match
-                        line_distance = abs(existing_line - comment['line'])
+                        line_distance = abs(existing_line - comment["line"])
                         if line_distance <= 5 and existing_title == issue_title:
-                            print(f"Skipping existing comment at {comment['path']}:{comment['line']} (similar to {existing_line})")
+                            print(
+                                f"Skipping existing comment at {comment['path']}:{comment['line']} (similar to {existing_line})"
+                            )
                             is_duplicate = True
                             break
-                
+
                 if is_duplicate:
                     continue
 
                 # Skip if duplicate in this batch
                 if location_key in seen_locations:
-                    print(f"Skipping duplicate comment at {comment['path']}:{comment['line']}")
+                    print(
+                        f"Skipping duplicate comment at {comment['path']}:{comment['line']}"
+                    )
                     continue
 
                 comments.append(comment)
@@ -241,13 +249,13 @@ class CommentPoster:
             if e.response and e.response.status_code == 422:
                 print(f"⚠️  422 Error posting review (likely invalid line numbers)")
                 print(f"Response: {e.response.text}")
-                
+
                 # Try posting as non-inline comments instead
                 print("Attempting fallback: posting as non-inline PR comments...")
                 return self._post_as_fallback_comments(
                     repo_owner, repo_name, pr_number, issues, headers
                 )
-            
+
             print(f"❌ Error posting review: {e}")
             print(f"Response: {e.response.text if e.response else 'No response'}")
             return False
@@ -262,14 +270,14 @@ class CommentPoster:
     ) -> bool:
         """
         Post issues as non-inline PR comments when inline posting fails.
-        
+
         Args:
             repo_owner: Repository owner
             repo_name: Repository name
             pr_number: PR number
             issues: List of issues that failed to post inline
             headers: Headers with authorization
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -280,7 +288,7 @@ class CommentPoster:
             if file_path not in issues_by_file:
                 issues_by_file[file_path] = []
             issues_by_file[file_path].append(issue)
-        
+
         # Build comment body
         body_parts = [
             "## ⚠️ Accessibility Review (Fallback Mode)",
@@ -289,18 +297,18 @@ class CommentPoster:
             "This may be due to line number conflicts or diff changes.",
             "",
         ]
-        
+
         for file_path, file_issues in sorted(issues_by_file.items()):
             body_parts.append(f"### 📄 {file_path}")
             body_parts.append("")
-            
+
             for issue in file_issues:
                 line = issue.get("line", "?")
                 severity = issue.get("severity", "")
                 title = issue.get("title", "")
                 wcag_sc = issue.get("wcag_sc", "")
                 description = issue.get("description", "")
-                
+
                 # Severity emoji
                 severity_emoji = {
                     "critical": "🔴",
@@ -308,18 +316,20 @@ class CommentPoster:
                     "minor": "🟡",
                     "info": "🔵",
                 }.get(severity, "⚪")
-                
+
                 body_parts.append(f"#### {severity_emoji} Line {line}: {title}")
                 body_parts.append(f"**WCAG:** {wcag_sc} | **Severity:** {severity}")
                 if description:
                     body_parts.append(f"> {description}")
                 body_parts.append("")
-        
+
         body_parts.append("---")
-        body_parts.append("🤖 Posted by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)")
-        
+        body_parts.append(
+            "🤖 Posted by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)"
+        )
+
         comment_body = "\n".join(body_parts)
-        
+
         # Post as simple comment
         return self.post_simple_comment(
             repo_owner, repo_name, pr_number, comment_body, headers
@@ -337,10 +347,10 @@ class CommentPoster:
     ) -> bool:
         """
         Post a final review summary without inline comments.
-        
+
         This is used after all platform phases are complete to post a single
         comprehensive summary of all issues found across all phases.
-        
+
         Args:
             repo_owner: Repository owner
             repo_name: Repository name
@@ -349,7 +359,7 @@ class CommentPoster:
             all_issues: List of all accessibility issues from all phases
             headers: Headers with authorization token
             event: Review event type (COMMENT, REQUEST_CHANGES, APPROVE)
-            
+
         Returns:
             True if successful, False otherwise
         """
@@ -443,7 +453,9 @@ class CommentPoster:
         line = issue.get("line", 0)
 
         if not file_path or line <= 0:
-            print(f"Skipping issue without valid file/line: {issue.get('title', 'Unknown')}")
+            print(
+                f"Skipping issue without valid file/line: {issue.get('title', 'Unknown')}"
+            )
             return None
 
         body = self._format_issue_body(issue)
@@ -472,7 +484,9 @@ class CommentPoster:
         parts.append("")
 
         # Metadata
-        parts.append(f"**WCAG SC:** {issue.get('wcag_sc', '')} (Level {issue.get('wcag_level', '')})")
+        parts.append(
+            f"**WCAG SC:** {issue.get('wcag_sc', '')} (Level {issue.get('wcag_level', '')})"
+        )
         parts.append(f"**Severity:** {issue.get('severity', '')}")
         parts.append("")
 
@@ -514,7 +528,9 @@ class CommentPoster:
 
         # Footer
         parts.append("---")
-        parts.append("🤖 Automated by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)")
+        parts.append(
+            "🤖 Automated by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)"
+        )
 
         return "\n".join(parts)
 
@@ -527,13 +543,13 @@ class CommentPoster:
     ) -> str:
         """
         Format review summary body.
-        
+
         Args:
             severity_counts: Dictionary of severity counts
             is_final: Whether this is the final review (default: True)
             current_phase: Current phase number for in-progress message (optional)
             total_phases: Total number of phases for in-progress message (optional)
-            
+
         Returns:
             Review summary string
         """
@@ -542,7 +558,9 @@ class CommentPoster:
         # For intermediate reviews, use minimal "in progress" body
         if not is_final:
             if current_phase and total_phases:
-                parts.append(f"⏳ Accessibility review in progress… Phase {current_phase}/{total_phases}")
+                parts.append(
+                    f"⏳ Accessibility review in progress… Phase {current_phase}/{total_phases}"
+                )
             else:
                 parts.append("⏳ Accessibility review in progress…")
             return "\n".join(parts)
@@ -571,13 +589,17 @@ class CommentPoster:
             parts.append("")
 
             if severity_counts.get("critical", 0) > 0:
-                parts.append("⚠️ **Critical issues found - please address before merging.**")
+                parts.append(
+                    "⚠️ **Critical issues found - please address before merging.**"
+                )
             else:
                 parts.append("ℹ️ Please review and address the issues when possible.")
 
         parts.append("")
         parts.append("---")
-        parts.append("🤖 Automated by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)")
+        parts.append(
+            "🤖 Automated by [accessibility-fixer](https://github.com/dominiclabbe/accessibility-fixer)"
+        )
 
         # Add debug footer if enabled
         if os.getenv("DEBUG_REVIEW_STAMP", "").lower() in ["1", "true", "yes"]:
@@ -595,7 +617,7 @@ class CommentPoster:
     ) -> set:
         """
         Fetch existing review comment locations to avoid re-posting.
-        
+
         Returns locations with anchor signature support for better deduplication.
         Uses comment body snippet to detect duplicates even if line number changes slightly.
 
@@ -618,20 +640,22 @@ class CommentPoster:
                 path = comment.get("path")
                 line = comment.get("line") or comment.get("original_line")
                 body = comment.get("body", "")
-                
+
                 # Extract title from body for fingerprinting
                 # Look for pattern: ## <emoji> Accessibility Issue: <title>
                 body_snippet = ""
                 if "Accessibility Issue:" in body:
                     try:
                         # Extract the title part
-                        title_start = body.index("Accessibility Issue:") + len("Accessibility Issue:")
+                        title_start = body.index("Accessibility Issue:") + len(
+                            "Accessibility Issue:"
+                        )
                         title_end = body.index("\n", title_start)
                         body_snippet = body[title_start:title_end].strip()[:50]
                     except (ValueError, IndexError):
                         # Fallback to first 50 chars of body
                         body_snippet = body[:50].strip()
-                
+
                 if path and line:
                     # Store with body snippet for anchor-based matching
                     locations.add((path, line, body_snippet))
@@ -696,11 +720,13 @@ class CommentPoster:
                 comment_id = root.get("id")
                 if comment_id in threads:
                     for reply in threads[comment_id]:
-                        thread["replies"].append({
-                            "body": reply.get("body", ""),
-                            "user": reply.get("user", {}).get("login", "unknown"),
-                            "created_at": reply.get("created_at", ""),
-                        })
+                        thread["replies"].append(
+                            {
+                                "body": reply.get("body", ""),
+                                "user": reply.get("user", {}).get("login", "unknown"),
+                                "created_at": reply.get("created_at", ""),
+                            }
+                        )
 
                 result.append(thread)
 

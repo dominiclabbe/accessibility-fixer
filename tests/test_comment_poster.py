@@ -28,10 +28,7 @@ class TestGetAppVersion:
         with patch.dict(os.environ, {}, clear=True):
             with patch("subprocess.run") as mock_run:
                 # Mock subprocess.CompletedProcess - only returncode and stdout are used
-                mock_run.return_value = MagicMock(
-                    returncode=0,
-                    stdout="abc1234\n"
-                )
+                mock_run.return_value = MagicMock(returncode=0, stdout="abc1234\n")
                 version = get_app_version()
                 assert version == "abc1234"
 
@@ -65,7 +62,7 @@ class TestGetDebugFooter:
                 "max_diff_chars": 200000,
             }
             footer = get_debug_footer(config)
-            
+
             assert "accessibility-fixer@abc123" in footer
             assert "model=gpt-5.2" in footer
             assert "provider=example.com" in footer
@@ -97,7 +94,7 @@ class TestCommentPosterDebugFooter:
         with patch.dict(os.environ, {}, clear=True):
             poster = CommentPoster()
             summary = poster._format_review_summary({"Critical": 2, "High": 1})
-            
+
             assert "# Accessibility Review Summary" in summary
             assert "_debug:" not in summary
             # The main footer should still be present
@@ -114,7 +111,7 @@ class TestCommentPosterDebugFooter:
                 }
                 poster = CommentPoster(reviewer_config=config)
                 summary = poster._format_review_summary({"Medium": 3})
-                
+
                 assert "# Accessibility Review Summary" in summary
                 assert "---" in summary
                 assert "_debug:" in summary
@@ -125,21 +122,21 @@ class TestCommentPosterDebugFooter:
     def test_review_summary_debug_stamp_various_flags(self):
         """Test different DEBUG_REVIEW_STAMP values."""
         config = {"model": "test-model"}
-        
+
         # Test "true"
         with patch.dict(os.environ, {"DEBUG_REVIEW_STAMP": "true"}):
             with patch("app.comment_poster.get_app_version", return_value="abc123"):
                 poster = CommentPoster(reviewer_config=config)
                 summary = poster._format_review_summary({"Low": 1})
                 assert "_debug:" in summary
-        
+
         # Test "yes"
         with patch.dict(os.environ, {"DEBUG_REVIEW_STAMP": "yes"}):
             with patch("app.comment_poster.get_app_version", return_value="abc123"):
                 poster = CommentPoster(reviewer_config=config)
                 summary = poster._format_review_summary({"Low": 1})
                 assert "_debug:" in summary
-        
+
         # Test "0" (disabled)
         with patch.dict(os.environ, {"DEBUG_REVIEW_STAMP": "0"}):
             poster = CommentPoster(reviewer_config=config)
@@ -153,7 +150,7 @@ class TestCommentPosterDebugFooter:
                 config = {"model": "gpt-5.2"}
                 poster = CommentPoster(reviewer_config=config)
                 summary = poster._format_review_summary({})
-                
+
                 assert "✅ No accessibility issues found" in summary
                 assert "_debug:" in summary
                 assert "accessibility-fixer@test123" in summary
@@ -167,10 +164,9 @@ class TestPhasedReviewSummary:
         """Test that final review includes full summary."""
         poster = CommentPoster()
         summary = poster._format_review_summary(
-            {"critical": 2, "major": 1},
-            is_final=True
+            {"critical": 2, "major": 1}, is_final=True
         )
-        
+
         assert "# Accessibility Review Summary" in summary
         assert "Found 3 accessibility issue(s)" in summary
         assert "🔴 **Critical**: 2" in summary
@@ -181,12 +177,9 @@ class TestPhasedReviewSummary:
         """Test that intermediate review shows progress message with phase info."""
         poster = CommentPoster()
         summary = poster._format_review_summary(
-            {"critical": 2, "major": 1},
-            is_final=False,
-            current_phase=2,
-            total_phases=4
+            {"critical": 2, "major": 1}, is_final=False, current_phase=2, total_phases=4
         )
-        
+
         assert "⏳ Accessibility review in progress… Phase 2/4" in summary
         assert "# Accessibility Review Summary" not in summary
         assert "Found" not in summary
@@ -194,11 +187,8 @@ class TestPhasedReviewSummary:
     def test_format_review_summary_intermediate_without_phase(self):
         """Test that intermediate review shows generic progress message."""
         poster = CommentPoster()
-        summary = poster._format_review_summary(
-            {"critical": 1},
-            is_final=False
-        )
-        
+        summary = poster._format_review_summary({"critical": 1}, is_final=False)
+
         assert "⏳ Accessibility review in progress…" in summary
         assert "# Accessibility Review Summary" not in summary
         assert "Found" not in summary
@@ -206,13 +196,13 @@ class TestPhasedReviewSummary:
     def test_post_review_comments_accepts_phase_params(self):
         """Test that post_review_comments accepts phase parameters."""
         poster = CommentPoster()
-        
+
         # Mock the requests.post call
         with patch("app.comment_poster.requests.post") as mock_post:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_post.return_value = mock_response
-            
+
             issues = [
                 {
                     "file": "test.js",
@@ -223,7 +213,7 @@ class TestPhasedReviewSummary:
                     "wcag_level": "A",
                 }
             ]
-            
+
             # Should not raise an error
             result = poster.post_review_comments(
                 repo_owner="test-owner",
@@ -236,7 +226,7 @@ class TestPhasedReviewSummary:
                 current_phase=1,
                 total_phases=3,
             )
-            
+
             assert result is True
             # Verify the body contains progress message
             call_args = mock_post.call_args
@@ -247,18 +237,18 @@ class TestPhasedReviewSummary:
     def test_post_final_review_summary_without_comments(self):
         """Test posting final summary without inline comments."""
         poster = CommentPoster()
-        
+
         with patch("app.comment_poster.requests.post") as mock_post:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_post.return_value = mock_response
-            
+
             all_issues = [
                 {"severity": "critical"},
                 {"severity": "major"},
                 {"severity": "minor"},
             ]
-            
+
             result = poster.post_final_review_summary(
                 repo_owner="test-owner",
                 repo_name="test-repo",
@@ -267,17 +257,17 @@ class TestPhasedReviewSummary:
                 all_issues=all_issues,
                 headers={"Authorization": "token test"},
             )
-            
+
             assert result is True
             # Verify the payload structure
             call_args = mock_post.call_args
             payload = call_args[1]["json"]
-            
+
             # Should have body and event, but NO comments
             assert "body" in payload
             assert "event" in payload
             assert "comments" not in payload
-            
+
             # Body should have full summary
             assert "# Accessibility Review Summary" in payload["body"]
             assert "Found 3 accessibility issue(s)" in payload["body"]

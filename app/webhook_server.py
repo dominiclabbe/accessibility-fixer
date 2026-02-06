@@ -340,32 +340,32 @@ def webhook():
 def get_max_severity(issues: list) -> str:
     """
     Determine the maximum severity from a list of issues.
-    
+
     Args:
         issues: List of issue dictionaries with 'severity' field
-        
+
     Returns:
         Maximum severity level: "critical", "major", "minor", or "info"
     """
     severity_order = ["info", "minor", "major", "critical"]
     max_severity = "info"
-    
+
     for issue in issues:
         severity = issue.get("severity", "minor")
         if severity in severity_order:
             if severity_order.index(severity) > severity_order.index(max_severity):
                 max_severity = severity
-    
+
     return max_severity
 
 
 def determine_commit_status(issues: list) -> tuple:
     """
     Determine commit status and description based on issues.
-    
+
     Args:
         issues: List of issue dictionaries
-        
+
     Returns:
         Tuple of (status, description) where:
         - status is "success", "neutral", or "failure"
@@ -373,17 +373,17 @@ def determine_commit_status(issues: list) -> tuple:
     """
     if not issues:
         return ("success", "No accessibility issues found")
-    
+
     max_severity = get_max_severity(issues)
     total_count = len(issues)
-    
+
     if max_severity == "critical":
         status = "failure"
     else:
         status = "neutral"
-    
+
     description = f"{total_count} issue(s) found (max severity: {max_severity})"
-    
+
     return (status, description)
 
 
@@ -463,12 +463,19 @@ def handle_pull_request(payload: dict):
         # DEBUG_WEB_REVIEW: Log changed files categorization
         if os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]:
             from app.constants import WEB_EXTENSIONS
-            web_files = [f for f in changed_files if any(f.endswith(ext) for ext in WEB_EXTENSIONS)]
+
+            web_files = [
+                f
+                for f in changed_files
+                if any(f.endswith(ext) for ext in WEB_EXTENSIONS)
+            ]
             non_web_files = [f for f in changed_files if f not in web_files]
-            
+
             logger.info("[DEBUG_WEB_REVIEW] File categorization:")
             logger.info(f"  All changed files ({len(all_files)}): {all_files}")
-            logger.info(f"  Filtered reviewable files ({len(changed_files)}): {changed_files}")
+            logger.info(
+                f"  Filtered reviewable files ({len(changed_files)}): {changed_files}"
+            )
             logger.info(f"  Web files ({len(web_files)}): {web_files}")
             logger.info(f"  Non-web files ({len(non_web_files)}): {non_web_files}")
 
@@ -496,7 +503,7 @@ def handle_pull_request(payload: dict):
         logger.info("Bucketing files by platform...")
         platform_buckets = bucket_files_by_platform(changed_files, pr_diff)
         platforms_in_order = get_platforms_in_order(platform_buckets)
-        
+
         if not platforms_in_order:
             logger.info("No files matched any platform. Skipping review.")
             comment_poster.post_commit_status(
@@ -508,7 +515,7 @@ def handle_pull_request(payload: dict):
                 headers,
             )
             return jsonify({"message": "No platform files"}), 200
-        
+
         logger.info(f"Platforms detected (in review order): {platforms_in_order}")
         for platform in platforms_in_order:
             logger.info(f"  {platform}: {len(platform_buckets[platform])} files")
@@ -531,10 +538,7 @@ def handle_pull_request(payload: dict):
         )
 
         def is_near_existing_comment(
-            file_path: str,
-            line: int,
-            issue: Dict = None,
-            range_threshold: int = 5
+            file_path: str, line: int, issue: Dict = None, range_threshold: int = 5
         ) -> tuple:
             """
             Check if a location is near any existing comment AND if it's the same issue.
@@ -623,20 +627,19 @@ def handle_pull_request(payload: dict):
                             if issue_title == existing_title:
                                 is_same_issue = True
                                 match_reason = "exact title match"
-                            elif (len(issue_title) >= 30 and
-                                  len(existing_title) >= 30):
+                            elif len(issue_title) >= 30 and len(existing_title) >= 30:
                                 # For longer titles, check prefix match
-                                min_len = min(len(issue_title),
-                                              len(existing_title))
+                                min_len = min(len(issue_title), len(existing_title))
                                 threshold = int(min_len * 0.8)
-                                if issue_title[:threshold] == \
-                                   existing_title[:threshold]:
+                                if (
+                                    issue_title[:threshold]
+                                    == existing_title[:threshold]
+                                ):
                                     is_same_issue = True
                                     match_reason = "fuzzy title match"
 
                         # Check anchor match (if title didn't match)
-                        if not is_same_issue and issue_anchor and \
-                           existing_snippet:
+                        if not is_same_issue and issue_anchor and existing_snippet:
                             # Check if anchor text appears in existing snippet
                             # Normalize both for comparison
                             anchor_norm = "".join(issue_anchor.split()).lower()
@@ -645,8 +648,7 @@ def handle_pull_request(payload: dict):
                             snippet_normalized = snippet_norm.lower()
 
                             # Try substring match
-                            if (anchor_normalized and
-                                len(anchor_normalized) >= 3):
+                            if anchor_normalized and len(anchor_normalized) >= 3:
                                 if anchor_normalized in snippet_normalized:
                                     is_same_issue = True
                                     match_reason = "anchor signature match"
@@ -655,12 +657,16 @@ def handle_pull_request(payload: dict):
                             if not is_same_issue and anchor_normalized:
                                 # Extract keyword: alphanumeric before special
                                 import re
-                                keyword_match = re.match(r'^([a-z0-9_]+)',
-                                                         anchor_normalized)
+
+                                keyword_match = re.match(
+                                    r"^([a-z0-9_]+)", anchor_normalized
+                                )
                                 if keyword_match:
                                     keyword = keyword_match.group(1)
-                                    if (len(keyword) >= 4 and
-                                       keyword in snippet_normalized):
+                                    if (
+                                        len(keyword) >= 4
+                                        and keyword in snippet_normalized
+                                    ):
                                         is_same_issue = True
                                         match_reason = "anchor signature match"
 
@@ -694,7 +700,11 @@ def handle_pull_request(payload: dict):
             nonlocal all_issues, posted_locations
 
             # DEBUG_WEB_REVIEW: Track skipped issues
-            debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+            debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in [
+                "1",
+                "true",
+                "yes",
+            ]
             skipped_issues = []
 
             # Filter out issues at locations we've already posted or near existing comments
@@ -703,19 +713,23 @@ def handle_pull_request(payload: dict):
                 file_path = issue.get("file", "")
                 line = issue.get("line", 0)
                 issue_title = issue.get("title", "Unknown")
-                resolved_line = issue.get("_resolved_line")  # May be set by semantic anchor
+                resolved_line = issue.get(
+                    "_resolved_line"
+                )  # May be set by semantic anchor
                 location = (file_path, line)
 
                 # Check exact match first
                 if location in posted_locations:
                     logger.info(f"Skipping already posted location: {file_path}:{line}")
                     if debug_web_review:
-                        skipped_issues.append({
-                            "file": file_path,
-                            "line": line,
-                            "title": issue_title[:60],
-                            "reason": "exact location already posted"
-                        })
+                        skipped_issues.append(
+                            {
+                                "file": file_path,
+                                "line": line,
+                                "title": issue_title[:60],
+                                "reason": "exact location already posted",
+                            }
+                        )
                     continue
 
                 # Check for nearby existing comments with smart identity matching
@@ -731,26 +745,31 @@ def handle_pull_request(payload: dict):
                             f"{matched_entry['file']}:{matched_entry['line']} "
                             f"(distance={matched_entry['distance']} lines)"
                         )
-                        if matched_entry.get('snippet'):
-                            snippet_preview = matched_entry['snippet'][:50]
+                        if matched_entry.get("snippet"):
+                            snippet_preview = matched_entry["snippet"][:50]
                             matched_info += f" snippet='{snippet_preview}...'"
 
                     logger.info(
                         f"Skipping issue at {file_path}:{line} - "
                         f"Title: '{issue_title[:60]}' | Proposed line: {line}"
-                        + (f" | Resolved line: {resolved_line}"
-                           if resolved_line else "")
+                        + (
+                            f" | Resolved line: {resolved_line}"
+                            if resolved_line
+                            else ""
+                        )
                         + f" | Reason: {skip_reason} with existing comment at "
                         f"{matched_info}"
                     )
-                    
+
                     if debug_web_review:
-                        skipped_issues.append({
-                            "file": file_path,
-                            "line": line,
-                            "title": issue_title[:60],
-                            "reason": f"{skip_reason} with existing at {matched_info}"
-                        })
+                        skipped_issues.append(
+                            {
+                                "file": file_path,
+                                "line": line,
+                                "title": issue_title[:60],
+                                "reason": f"{skip_reason} with existing at {matched_info}",
+                            }
+                        )
                     continue
 
                 # This is a new location, add it
@@ -772,21 +791,21 @@ def handle_pull_request(payload: dict):
             logger.info(
                 f"Posting {len(new_issues)} new comments from batch (total posted: {len(all_issues)})..."
             )
-            
+
             # Post intermediate reviews with minimal body (not final)
             # Multiple platforms means we're in a phased review
             is_final_review = len(platforms_in_order) == 1
             current_phase_num = None
             total_phases_num = None
-            
+
             if not is_final_review:
                 # Determine which phase we're currently in by checking the batch
                 # This is called during a phase, so we use the current phase_idx
                 # We'll need to capture this from the outer scope
                 # For now, we mark all intermediate batches as not final
-                current_phase_num = getattr(post_batch_comments, 'current_phase', None)
+                current_phase_num = getattr(post_batch_comments, "current_phase", None)
                 total_phases_num = len(platforms_in_order)
-            
+
             comment_poster.post_review_comments(
                 repo_owner,
                 repo_name,
@@ -802,44 +821,44 @@ def handle_pull_request(payload: dict):
 
         # Perform phased review - one platform at a time
         logger.info("Starting platform-phased accessibility review...")
-        
+
         for phase_idx, platform in enumerate(platforms_in_order, 1):
             logger.info(f"\n{'='*80}")
-            logger.info(f"PHASE {phase_idx}/{len(platforms_in_order)}: Reviewing {platform}")
+            logger.info(
+                f"PHASE {phase_idx}/{len(platforms_in_order)}: Reviewing {platform}"
+            )
             logger.info(f"{'='*80}")
-            
+
             # Set current phase on callback for phase tracking in reviews
             post_batch_comments.current_phase = phase_idx
-            
+
             # Get files for this platform
             platform_files = platform_buckets[platform]
             logger.info(f"Files in this phase: {len(platform_files)}")
-            
+
             # Load platform-specific guides (single platform only)
             logger.info(f"Loading {platform}-specific guides...")
             platform_guides = guide_loader.load_platform_specific_guides([platform])
             logger.info(f"Loaded guides: {len(platform_guides)} characters")
-            
+
             # Filter existing_comments to only include files in this phase
             phase_existing_comments = filter_locations_for_files(
-                list(existing_locations), 
-                platform_files
+                list(existing_locations), platform_files
             )
             logger.info(
                 f"Filtered existing comments: {len(phase_existing_comments)} "
                 f"(out of {len(existing_locations)} total)"
             )
-            
+
             # Filter review_threads to only include files in this phase
             phase_review_threads = filter_locations_for_files(
-                review_threads,
-                platform_files
+                review_threads, platform_files
             )
             logger.info(
                 f"Filtered review threads: {len(phase_review_threads)} "
                 f"(out of {len(review_threads)} total)"
             )
-            
+
             # Review this platform's files
             remaining_issues = pr_reviewer.review_pr_diff(
                 pr_diff,
@@ -850,12 +869,14 @@ def handle_pull_request(payload: dict):
                 existing_comments=phase_existing_comments,
                 review_threads=phase_review_threads,
             )
-            
+
             # Add any remaining issues (if callback wasn't used)
             if remaining_issues:
                 all_issues.extend(remaining_issues)
-            
-            logger.info(f"Phase {phase_idx} complete. Total issues so far: {len(all_issues)}")
+
+            logger.info(
+                f"Phase {phase_idx} complete. Total issues so far: {len(all_issues)}"
+            )
 
         logger.info(
             f"\n{'='*80}\n"
@@ -895,7 +916,7 @@ def handle_pull_request(payload: dict):
 
         # Determine final status based on severities
         status, description = determine_commit_status(all_issues)
-        
+
         if all_issues:
             comment_poster.post_commit_status(
                 repo_owner, repo_name, head_sha, status, description, headers
