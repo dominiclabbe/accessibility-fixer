@@ -277,12 +277,17 @@ class TestLocationFilteringBug:
             (30, "ios/ViewController.swift", 40, "More data"),
         ]
         
-        for entry in test_cases:
+        expected_paths = [
+            "web/src/Button.tsx",
+            "android/MainActivity.kt",
+            "ios/ViewController.swift",
+        ]
+        
+        for entry, expected_path in zip(test_cases, expected_paths):
             path = extract_path_from_entry(entry)
-            # Should find the path element regardless of position
-            assert '/' in path, f"Should extract path from {entry}, got {path}"
-            # Should not be a number
-            assert not path.isdigit(), f"Should not extract number as path from {entry}"
+            # Should find the correct path element regardless of position
+            assert path == expected_path, f"Expected '{expected_path}' from {entry}, got '{path}'"
+            assert '/' in path, f"Path should contain separator: {path}"
 
     def test_tuple_with_multiple_strings_selects_path_like(self):
         """

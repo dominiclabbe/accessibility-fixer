@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Platform detection order (strict)
 PLATFORM_ORDER = ["Android", "iOS", "Web", "React Native", "Flutter"]
 
+# Minimum length for a valid file path (e.g., "a/b" is 3 chars)
+MIN_PATH_LENGTH = 2
+
 
 def detect_react_native_in_diff(file_path: str, pr_diff: str) -> bool:
     """
@@ -206,7 +209,7 @@ def extract_path_from_entry(entry) -> str:
                 continue
             
             # Check if this looks like a file path
-            if ('/' in element or '\\' in element) and len(element) > 1:
+            if ('/' in element or '\\' in element) and len(element) > MIN_PATH_LENGTH:
                 # This looks like a file path
                 return element
         
