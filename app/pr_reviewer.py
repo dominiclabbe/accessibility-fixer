@@ -269,7 +269,7 @@ class PRReviewer:
                         on_batch_complete(deduped)
                     except Exception:
                         if debug_web_review:
-                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1}):")
+                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1})")
                         raise
                     all_issues = []
 
@@ -289,7 +289,7 @@ class PRReviewer:
                     on_batch_complete(deduped)
                 except Exception:
                     if debug_web_review:
-                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final):")
+                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final)")
                     raise
             return []
 
