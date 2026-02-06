@@ -188,7 +188,9 @@ class DiffParser:
 
         # DEBUG_WEB_REVIEW: Log detailed diagnostics when result is empty for non-empty requested_files
         if debug_web_review and not result and file_paths:
-            logger.info("[DEBUG_WEB_REVIEW] Empty diff result despite non-empty requested_files")
+            logger.info(
+                "[DEBUG_WEB_REVIEW] Empty diff result despite non-empty requested_files"
+            )
             logger.info(f"  Requested files ({len(file_paths)}): {file_paths}")
             logger.info(f"  Number of diff paths detected: {len(diff_paths)}")
             logger.info(f"  First 15 diff paths: {diff_paths[:15]}")
@@ -208,7 +210,9 @@ class DiffParser:
             # difflib.get_close_matches for each requested file against diff paths (up to 5 matches)
             logger.info("  Close matches (difflib):")
             for file_path in file_paths:
-                close_matches = get_close_matches(file_path, diff_paths, n=5, cutoff=0.6)
+                close_matches = get_close_matches(
+                    file_path, diff_paths, n=5, cutoff=0.6
+                )
                 if close_matches:
                     logger.info(f"    {file_path} -> {close_matches}")
                 else:
