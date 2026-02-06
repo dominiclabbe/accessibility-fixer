@@ -213,8 +213,9 @@ class DiffParser:
             # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
                 path_part = line[6:]  # Skip '+++ b/'
-                # Split on whitespace and take first token
-                current_file = path_part.split()[0] if path_part else ""
+                # Split on whitespace and take first token, handle edge case of whitespace-only
+                tokens = path_part.split()
+                current_file = tokens[0] if tokens else ""
                 commentable[current_file] = []
                 in_hunk = False
                 continue
@@ -270,7 +271,8 @@ class DiffParser:
             # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
                 path_part = line[6:]
-                current_file = path_part.split()[0] if path_part else ""
+                tokens = path_part.split()
+                current_file = tokens[0] if tokens else ""
                 ranges[current_file] = []
                 continue
 
@@ -350,7 +352,8 @@ class DiffParser:
             # Extract path, stopping at whitespace to avoid line-bleed
             if line.startswith("+++ b/"):
                 path_part = line[6:]
-                current_file = path_part.split()[0] if path_part else ""
+                tokens = path_part.split()
+                current_file = tokens[0] if tokens else ""
                 in_hunk = False
                 current_line = 0
                 lines_buffer = []
