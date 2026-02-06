@@ -149,6 +149,65 @@ def get_platforms_in_order(buckets: Dict[str, List[str]]) -> List[str]:
     return [platform for platform in PLATFORM_ORDER if buckets[platform]]
 
 
+def normalize_path(path: str) -> str:
+    """
+    Normalize a file path for consistent comparison.
+    
+    - Converts backslashes to forward slashes
+    - Strips leading slash
+    - Returns lowercase for case-insensitive comparison
+    
+    Args:
+        path: File path to normalize
+        
+    Returns:
+        Normalized path
+    """
+    if not path:
+        return ""
+    
+    # Convert backslashes to forward slashes
+    normalized = path.replace("\\", "/")
+    
+    # Strip leading slash
+    if normalized.startswith("/"):
+        normalized = normalized[1:]
+    
+    return normalized
+
+
+def extract_path_from_entry(entry) -> str:
+    """
+    Extract file path from various entry formats.
+    
+    Supports:
+    - Tuples: (file, line, ...) where file is first element
+    - Dicts: {'file': ...}, {'path': ...}, {'file_path': ...}
+    - Nested: {'comment': {'path': ...}}
+    
+    Args:
+        entry: Location entry (tuple or dict)
+        
+    Returns:
+        Extracted file path or empty string if not found
+    """
+    if isinstance(entry, tuple) and len(entry) >= 1:
+        return str(entry[0])
+    elif isinstance(entry, dict):
+        # Try multiple key names
+        path = entry.get("path") or entry.get("file") or entry.get("file_path")
+        
+        # If not found at top level, try nested comment object
+        if not path and "comment" in entry:
+            comment = entry["comment"]
+            if isinstance(comment, dict):
+                path = comment.get("path") or comment.get("file") or comment.get("file_path")
+        
+        return str(path) if path else ""
+    
+    return ""
+
+
 def filter_locations_for_files(
     locations: List, 
     file_paths: List[str]
@@ -159,7 +218,12 @@ def filter_locations_for_files(
     
     Supports multiple entry formats:
     - Tuples: (file, line, ...) where file is first element
-    - Dicts: {'file': ...} or {'path': ...}
+    - Dicts: {'file': ...} or {'path': ...} or {'file_path': ...}
+    - Nested: {'comment': {'path': ...}}
+    
+    Paths are normalized before comparison:
+    - Backslashes converted to forward slashes
+    - Leading slashes stripped
     
     Args:
         locations: List of location entries (tuples or dicts)
@@ -171,18 +235,15 @@ def filter_locations_for_files(
     if not locations:
         return []
     
-    file_set = set(file_paths)
+    # Normalize file paths for comparison
+    normalized_file_set = {normalize_path(f) for f in file_paths}
     filtered = []
     
     for entry in locations:
-        file_path = None
+        file_path = extract_path_from_entry(entry)
+        normalized_path = normalize_path(file_path)
         
-        if isinstance(entry, tuple) and len(entry) >= 1:
-            file_path = entry[0]
-        elif isinstance(entry, dict):
-            file_path = entry.get("file") or entry.get("path")
-        
-        if file_path and file_path in file_set:
+        if normalized_path and normalized_path in normalized_file_set:
             filtered.append(entry)
     
     return filtered
