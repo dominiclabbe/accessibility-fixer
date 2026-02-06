@@ -856,19 +856,32 @@ def handle_pull_request(payload: dict):
                 and len(phase_existing_comments) == 0
                 and len(existing_locations) > 0
             ):
-                from app.platform_bucketing import extract_path_from_entry, normalize_path
-                
+                from app.platform_bucketing import (
+                    extract_path_from_entry,
+                    normalize_path,
+                )
+
                 # Extract paths from unfiltered locations (sample up to 10)
                 sample_size = min(10, len(existing_locations))
                 sample_locations = list(existing_locations)[:sample_size]
-                sample_paths = [extract_path_from_entry(loc) for loc in sample_locations]
+                sample_paths = [
+                    extract_path_from_entry(loc) for loc in sample_locations
+                ]
                 normalized_sample = [normalize_path(p) for p in sample_paths if p]
-                
+
                 logger.info("[DEBUG_WEB_REVIEW] Existing comments filtered to 0:")
                 logger.info(f"  Platform: {platform}")
-                logger.info(f"  Phase files ({len(platform_files)}): {platform_files[:10]}")
-                logger.info(f"  Sample extracted paths ({len(normalized_sample)}): {normalized_sample}")
-                logger.info(f"  Entry format: tuple with {len(list(existing_locations)[0])} elements" if existing_locations else "  Entry format: unknown")
+                logger.info(
+                    f"  Phase files ({len(platform_files)}): {platform_files[:10]}"
+                )
+                logger.info(
+                    f"  Sample extracted paths ({len(normalized_sample)}): {normalized_sample}"
+                )
+                logger.info(
+                    f"  Entry format: tuple with {len(list(existing_locations)[0])} elements"
+                    if existing_locations
+                    else "  Entry format: unknown"
+                )
 
             # Filter review_threads to only include files in this phase
             phase_review_threads = filter_locations_for_files(
@@ -885,20 +898,30 @@ def handle_pull_request(payload: dict):
                 and len(phase_review_threads) == 0
                 and len(review_threads) > 0
             ):
-                from app.platform_bucketing import extract_path_from_entry, normalize_path
-                
+                from app.platform_bucketing import (
+                    extract_path_from_entry,
+                    normalize_path,
+                )
+
                 # Extract paths from unfiltered threads (sample up to 10)
                 sample_size = min(10, len(review_threads))
                 sample_threads = review_threads[:sample_size]
-                sample_paths = [extract_path_from_entry(thread) for thread in sample_threads]
+                sample_paths = [
+                    extract_path_from_entry(thread) for thread in sample_threads
+                ]
                 normalized_sample = [normalize_path(p) for p in sample_paths if p]
-                
+
                 logger.info("[DEBUG_WEB_REVIEW] Review threads filtered to 0:")
                 logger.info(f"  Platform: {platform}")
-                logger.info(f"  Phase files ({len(platform_files)}): {platform_files[:10]}")
-                logger.info(f"  Sample extracted paths ({len(normalized_sample)}): {normalized_sample}")
-                logger.info(f"  Entry format: dict with keys: {list(review_threads[0].keys()) if review_threads else []}")
-
+                logger.info(
+                    f"  Phase files ({len(platform_files)}): {platform_files[:10]}"
+                )
+                logger.info(
+                    f"  Sample extracted paths ({len(normalized_sample)}): {normalized_sample}"
+                )
+                logger.info(
+                    f"  Entry format: dict with keys: {list(review_threads[0].keys()) if review_threads else []}"
+                )
 
             # Review this platform's files
             remaining_issues = pr_reviewer.review_pr_diff(
