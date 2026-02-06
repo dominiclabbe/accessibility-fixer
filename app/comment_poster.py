@@ -204,7 +204,7 @@ class CommentPoster:
         review_body = self._format_review_summary(severity_counts)
 
         # Determine event based on severities
-        if event == "COMMENT" and severity_counts.get("Critical", 0) > 0:
+        if event == "COMMENT" and severity_counts.get("critical", 0) > 0:
             event = "REQUEST_CHANGES"
 
         # Post review
@@ -291,10 +291,10 @@ class CommentPoster:
                 
                 # Severity emoji
                 severity_emoji = {
-                    "Critical": "🔴",
-                    "High": "🟠",
-                    "Medium": "🟡",
-                    "Low": "🔵",
+                    "critical": "🔴",
+                    "major": "🟠",
+                    "minor": "🟡",
+                    "info": "🔵",
                 }.get(severity, "⚪")
                 
                 body_parts.append(f"#### {severity_emoji} Line {line}: {title}")
@@ -386,10 +386,10 @@ class CommentPoster:
     def _format_issue_body(self, issue: Dict) -> str:
         """Format issue as markdown comment body."""
         severity_emoji = {
-            "Critical": "🔴",
-            "High": "🟠",
-            "Medium": "🟡",
-            "Low": "🔵",
+            "critical": "🔴",
+            "major": "🟠",
+            "minor": "🟡",
+            "info": "🔵",
         }
         emoji = severity_emoji.get(issue.get("severity", ""), "⚪")
 
@@ -461,18 +461,18 @@ class CommentPoster:
             parts.append(f"Found {total} accessibility issue(s):")
             parts.append("")
 
-            if severity_counts.get("Critical", 0) > 0:
-                parts.append(f"- 🔴 **Critical**: {severity_counts['Critical']}")
-            if severity_counts.get("High", 0) > 0:
-                parts.append(f"- 🟠 **High**: {severity_counts['High']}")
-            if severity_counts.get("Medium", 0) > 0:
-                parts.append(f"- 🟡 **Medium**: {severity_counts['Medium']}")
-            if severity_counts.get("Low", 0) > 0:
-                parts.append(f"- 🔵 **Low**: {severity_counts['Low']}")
+            if severity_counts.get("critical", 0) > 0:
+                parts.append(f"- 🔴 **Critical**: {severity_counts['critical']}")
+            if severity_counts.get("major", 0) > 0:
+                parts.append(f"- 🟠 **Major**: {severity_counts['major']}")
+            if severity_counts.get("minor", 0) > 0:
+                parts.append(f"- 🟡 **Minor**: {severity_counts['minor']}")
+            if severity_counts.get("info", 0) > 0:
+                parts.append(f"- 🔵 **Info**: {severity_counts['info']}")
 
             parts.append("")
 
-            if severity_counts.get("Critical", 0) > 0:
+            if severity_counts.get("critical", 0) > 0:
                 parts.append("⚠️ **Critical issues found - please address before merging.**")
             else:
                 parts.append("ℹ️ Please review and address the issues when possible.")
@@ -615,10 +615,10 @@ class CommentPoster:
     @staticmethod
     def _count_severities(issues: List[Dict]) -> Dict[str, int]:
         """Count issues by severity."""
-        counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+        counts = {"critical": 0, "major": 0, "minor": 0, "info": 0}
 
         for issue in issues:
-            severity = issue.get("severity", "")
+            severity = issue.get("severity", "minor")
             if severity in counts:
                 counts[severity] += 1
 
