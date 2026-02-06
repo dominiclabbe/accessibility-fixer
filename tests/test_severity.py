@@ -189,16 +189,16 @@ class TestSeverityCounting:
         assert counts["info"] == 0
 
     def test_count_severities_with_missing_severity(self):
-        """Test counting when issues have missing severity (defaults to minor in counting)."""
+        """Test counting when issues have missing severity (defaults to minor via .get())."""
         issues = [
             {"severity": "critical"},
-            {},  # Missing severity - will be counted as "minor" by _count_severities
+            {},  # Missing severity - will default to "minor" via .get("severity", "minor")
             {"severity": "major"},
         ]
         
         counts = CommentPoster._count_severities(issues)
         
-        # _count_severities uses .get("severity", "minor"), so missing severity is counted as minor
+        # _count_severities uses .get("severity", "minor"), so missing keys default to "minor"
         assert counts["critical"] == 1
         assert counts["major"] == 1
         assert counts["minor"] == 1
@@ -266,15 +266,15 @@ class TestMaxSeverity:
         assert max_sev == "info"
 
     def test_get_max_severity_with_missing_severity(self):
-        """Test that missing severity defaults to minor in max calculation."""
+        """Test that missing severity defaults to minor via .get() in max calculation."""
         issues = [
             {"severity": "info"},
-            {},  # Missing severity should be treated as "minor"
+            {},  # Missing severity - will default to "minor" via .get("severity", "minor")
         ]
         
         max_sev = get_max_severity(issues)
         
-        # Missing severity defaults to "minor", so max should be "minor"
+        # get_max_severity uses .get("severity", "minor"), so missing keys default to "minor"
         assert max_sev == "minor"
 
 
