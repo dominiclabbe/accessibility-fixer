@@ -183,7 +183,8 @@ def extract_path_from_entry(entry) -> str:
     Extract file path from various entry formats.
 
     Supports:
-    - Tuples: (file, line, ...) where file is first element
+    - Tuples: Intelligently detects which element is the file path by looking for
+              strings containing '/' or '\' that resemble file paths
     - Dicts: {'file': ...}, {'path': ...}, {'file_path': ...}
     - Nested: {'comment': {'path': ...}}
 
@@ -194,7 +195,29 @@ def extract_path_from_entry(entry) -> str:
         Extracted file path or empty string if not found
     """
     if isinstance(entry, tuple) and len(entry) >= 1:
+        # Intelligently find the file path element
+        # A file path typically:
+        # - Is a string
+        # - Contains '/' or '\' (path separator)
+        # - Has a reasonable length (not just a single char)
+        # - May have a file extension
+        for element in entry:
+            if not isinstance(element, str):
+                continue
+            
+            # Check if this looks like a file path
+            if ('/' in element or '\\' in element) and len(element) > 1:
+                # This looks like a file path
+                return element
+        
+        # Fallback: if no obvious path found, use first string element
+        for element in entry:
+            if isinstance(element, str) and len(element) > 0:
+                return element
+        
+        # Last resort: convert first element to string
         return str(entry[0])
+    
     elif isinstance(entry, dict):
         # Try multiple key names
         path = entry.get("path") or entry.get("file") or entry.get("file_path")

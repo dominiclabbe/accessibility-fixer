@@ -258,3 +258,79 @@ class TestLocationFilteringBug:
         assert "web/src/components/Button.tsx" in web_paths
         assert "web/src/components/Form.tsx" in web_paths
         assert "web/src/styles.css" in web_paths
+
+    def test_tuple_path_detection_not_at_index_0(self):
+        """
+        Test that path extraction works when path is not at index 0 in tuple.
+        
+        This tests the intelligent path detection that doesn't rely on hardcoded indices.
+        """
+        from app.platform_bucketing import extract_path_from_entry
+        
+        # Path at different positions in tuples
+        test_cases = [
+            # (line, path, snippet) - path at index 1
+            (10, "web/src/Button.tsx", "Missing aria-label"),
+            # (snippet, line, path) - path at index 2
+            ("Issue description", 20, "android/MainActivity.kt"),
+            # Mixed types with path in middle
+            (30, "ios/ViewController.swift", 40, "More data"),
+        ]
+        
+        for entry in test_cases:
+            path = extract_path_from_entry(entry)
+            # Should find the path element regardless of position
+            assert '/' in path, f"Should extract path from {entry}, got {path}"
+            # Should not be a number
+            assert not path.isdigit(), f"Should not extract number as path from {entry}"
+
+    def test_tuple_with_multiple_strings_selects_path_like(self):
+        """
+        Test that when tuple has multiple strings, the one that looks like a path is selected.
+        """
+        from app.platform_bucketing import extract_path_from_entry
+        
+        # Tuple with multiple strings - should pick the path-like one
+        entry = ("Short text", "web/components/Form.tsx", "Another string without slashes")
+        path = extract_path_from_entry(entry)
+        
+        assert path == "web/components/Form.tsx"
+        
+    def test_tuple_with_backslashes_extracted_correctly(self):
+        """
+        Test that paths with backslashes are detected as paths.
+        """
+        from app.platform_bucketing import extract_path_from_entry
+        
+        # Windows-style path with backslashes
+        entry = (20, "web\\src\\Button.tsx", "Issue")
+        path = extract_path_from_entry(entry)
+        
+        assert "\\" in path or "/" in path
+        assert "Button.tsx" in path
+        
+    def test_tuple_all_integers_falls_back_to_first(self):
+        """
+        Test that if tuple has no path-like strings, it falls back gracefully.
+        """
+        from app.platform_bucketing import extract_path_from_entry
+        
+        # Tuple with only integers
+        entry = (10, 20, 30)
+        path = extract_path_from_entry(entry)
+        
+        # Should return string representation of first element
+        assert path == "10"
+        
+    def test_tuple_empty_strings_handled(self):
+        """
+        Test that empty strings in tuple are skipped.
+        """
+        from app.platform_bucketing import extract_path_from_entry
+        
+        # Tuple with empty strings
+        entry = ("", "web/Button.tsx", "")
+        path = extract_path_from_entry(entry)
+        
+        # Should skip empty strings and find the path
+        assert path == "web/Button.tsx"
