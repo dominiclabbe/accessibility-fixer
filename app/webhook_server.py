@@ -772,6 +772,21 @@ def handle_pull_request(payload: dict):
             logger.info(
                 f"Posting {len(new_issues)} new comments from batch (total posted: {len(all_issues)})..."
             )
+            
+            # Post intermediate reviews with minimal body (not final)
+            # Multiple platforms means we're in a phased review
+            is_final_review = len(platforms_in_order) == 1
+            current_phase_num = None
+            total_phases_num = None
+            
+            if not is_final_review:
+                # Determine which phase we're currently in by checking the batch
+                # This is called during a phase, so we use the current phase_idx
+                # We'll need to capture this from the outer scope
+                # For now, we mark all intermediate batches as not final
+                current_phase_num = getattr(post_batch_comments, 'current_phase', None)
+                total_phases_num = len(platforms_in_order)
+            
             comment_poster.post_review_comments(
                 repo_owner,
                 repo_name,
@@ -780,6 +795,9 @@ def handle_pull_request(payload: dict):
                 new_issues,
                 headers,
                 skip_existing_check=True,  # We already filtered above
+                is_final=is_final_review,
+                current_phase=current_phase_num,
+                total_phases=total_phases_num,
             )
 
         # Perform phased review - one platform at a time
@@ -789,6 +807,9 @@ def handle_pull_request(payload: dict):
             logger.info(f"\n{'='*80}")
             logger.info(f"PHASE {phase_idx}/{len(platforms_in_order)}: Reviewing {platform}")
             logger.info(f"{'='*80}")
+            
+            # Set current phase on callback for phase tracking in reviews
+            post_batch_comments.current_phase = phase_idx
             
             # Get files for this platform
             platform_files = platform_buckets[platform]
@@ -841,6 +862,18 @@ def handle_pull_request(payload: dict):
             f"All phases complete. Found {len(all_issues)} total accessibility issues\n"
             f"{'='*80}"
         )
+
+        # Post final comprehensive summary if this was a multi-platform review
+        if len(platforms_in_order) > 1 and all_issues:
+            logger.info("Posting final comprehensive accessibility review summary...")
+            comment_poster.post_final_review_summary(
+                repo_owner,
+                repo_name,
+                pr_number,
+                head_sha,
+                all_issues,
+                headers,
+            )
 
         # Generate SARIF output if requested
         if os.getenv("OUTPUT_SARIF", "").lower() in ["1", "true", "yes"]:

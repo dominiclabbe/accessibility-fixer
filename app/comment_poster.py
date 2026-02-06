@@ -131,6 +131,9 @@ class CommentPoster:
         headers: Dict[str, str],
         event: str = "COMMENT",
         skip_existing_check: bool = False,
+        is_final: bool = True,
+        current_phase: Optional[int] = None,
+        total_phases: Optional[int] = None,
     ) -> bool:
         """
         Post review comments for accessibility issues.
@@ -143,6 +146,10 @@ class CommentPoster:
             issues: List of accessibility issues
             headers: Headers with authorization token
             event: Review event type (COMMENT, REQUEST_CHANGES, APPROVE)
+            skip_existing_check: Skip checking for existing comments
+            is_final: Whether this is the final review (default: True)
+            current_phase: Current phase number for in-progress message (optional)
+            total_phases: Total number of phases for in-progress message (optional)
 
         Returns:
             True if successful, False otherwise
@@ -201,7 +208,12 @@ class CommentPoster:
 
         # Build review body
         severity_counts = self._count_severities(issues)
-        review_body = self._format_review_summary(severity_counts)
+        review_body = self._format_review_summary(
+            severity_counts,
+            is_final=is_final,
+            current_phase=current_phase,
+            total_phases=total_phases,
+        )
 
         # Determine event based on severities
         if event == "COMMENT" and severity_counts.get("critical", 0) > 0:
@@ -312,6 +324,66 @@ class CommentPoster:
         return self.post_simple_comment(
             repo_owner, repo_name, pr_number, comment_body, headers
         )
+
+    def post_final_review_summary(
+        self,
+        repo_owner: str,
+        repo_name: str,
+        pr_number: int,
+        commit_sha: str,
+        all_issues: List[Dict],
+        headers: Dict[str, str],
+        event: str = "COMMENT",
+    ) -> bool:
+        """
+        Post a final review summary without inline comments.
+        
+        This is used after all platform phases are complete to post a single
+        comprehensive summary of all issues found across all phases.
+        
+        Args:
+            repo_owner: Repository owner
+            repo_name: Repository name
+            pr_number: PR number
+            commit_sha: Commit SHA to review
+            all_issues: List of all accessibility issues from all phases
+            headers: Headers with authorization token
+            event: Review event type (COMMENT, REQUEST_CHANGES, APPROVE)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Build review body with full summary
+        severity_counts = self._count_severities(all_issues)
+        review_body = self._format_review_summary(
+            severity_counts,
+            is_final=True,
+        )
+
+        # Determine event based on severities
+        if event == "COMMENT" and severity_counts.get("critical", 0) > 0:
+            event = "REQUEST_CHANGES"
+
+        # Post review without comments (just the summary body)
+        url = f"{self.github_api_url}/repos/{repo_owner}/{repo_name}/pulls/{pr_number}/reviews"
+
+        payload = {
+            "commit_id": commit_sha,
+            "body": review_body,
+            "event": event,
+        }
+
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+
+            print(f"✅ Posted final review summary")
+            return True
+
+        except requests.exceptions.HTTPError as e:
+            print(f"❌ Error posting final review summary: {e}")
+            print(f"Response: {e.response.text if e.response else 'No response'}")
+            return False
 
     def post_commit_status(
         self,
@@ -446,10 +518,36 @@ class CommentPoster:
 
         return "\n".join(parts)
 
-    def _format_review_summary(self, severity_counts: Dict[str, int]) -> str:
-        """Format review summary body."""
+    def _format_review_summary(
+        self,
+        severity_counts: Dict[str, int],
+        is_final: bool = True,
+        current_phase: Optional[int] = None,
+        total_phases: Optional[int] = None,
+    ) -> str:
+        """
+        Format review summary body.
+        
+        Args:
+            severity_counts: Dictionary of severity counts
+            is_final: Whether this is the final review (default: True)
+            current_phase: Current phase number for in-progress message (optional)
+            total_phases: Total number of phases for in-progress message (optional)
+            
+        Returns:
+            Review summary string
+        """
         parts = []
 
+        # For intermediate reviews, use minimal "in progress" body
+        if not is_final:
+            if current_phase and total_phases:
+                parts.append(f"⏳ Accessibility review in progress… Phase {current_phase}/{total_phases}")
+            else:
+                parts.append("⏳ Accessibility review in progress…")
+            return "\n".join(parts)
+
+        # For final review, include full summary
         parts.append("# Accessibility Review Summary")
         parts.append("")
 
