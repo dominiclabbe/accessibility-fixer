@@ -67,7 +67,8 @@ class DiffParser:
 
                 # Extract file path from "a/..." or "b/..."
                 # Match "b/" followed by path, stopping at whitespace to avoid line-bleed
-                # Use negative lookbehind to skip "a/" paths
+                # Regex uses \s before b/ to skip "a/" paths and match only the second "b/"
+                # This correctly handles renames: "diff --git a/old.txt b/new.txt"
                 match = re.search(r"\sb/(\S+)", line)
                 if match:
                     current_file = match.group(1)

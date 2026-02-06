@@ -487,8 +487,14 @@ class TestPathNormalization:
         assert "\r" not in result["test.py"]
 
     def test_corrupted_path_with_space_and_extra_path(self):
-        """Test handling of corrupted path like 'src/Main.tsx b/web/src/Main.tsx'."""
-        # This simulates the observed bug where path extraction captures too much
+        """Test that we extract only the destination path from rename/move diffs.
+        
+        When a file is renamed (e.g., src/Main.tsx -> web/src/Main.tsx), the diff
+        header is 'diff --git a/src/Main.tsx b/web/src/Main.tsx'. Without proper
+        parsing, we could incorrectly capture both paths as one (corruption).
+        This test ensures we extract only 'web/src/Main.tsx' (the destination).
+        """
+        # This simulates a file rename in Git
         diff = (
             "diff --git a/src/components/Main.tsx b/web/src/components/Main.tsx\n"
             "index 1234567..abcdefg 100644\n"
@@ -504,9 +510,9 @@ class TestPathNormalization:
         parser = DiffParser()
         result = parser.parse_diff(diff)
         
-        # Should extract only the first path after "b/" (stopping at whitespace)
+        # Should extract only the destination path (after "b/")
         assert "web/src/components/Main.tsx" in result
-        # Should NOT have corrupted path
+        # Should NOT have corrupted path that includes both src and dest
         assert "src/components/Main.tsx b/web/src/components/Main.tsx" not in result
 
     def test_path_with_trailing_whitespace(self):
