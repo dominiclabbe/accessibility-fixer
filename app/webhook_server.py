@@ -359,6 +359,34 @@ def get_max_severity(issues: list) -> str:
     return max_severity
 
 
+def determine_commit_status(issues: list) -> tuple:
+    """
+    Determine commit status and description based on issues.
+    
+    Args:
+        issues: List of issue dictionaries
+        
+    Returns:
+        Tuple of (status, description) where:
+        - status is "success", "neutral", or "failure"
+        - description is a string describing the result
+    """
+    if not issues:
+        return ("success", "No accessibility issues found")
+    
+    max_severity = get_max_severity(issues)
+    total_count = len(issues)
+    
+    if max_severity == "critical":
+        status = "failure"
+    else:
+        status = "neutral"
+    
+    description = f"{total_count} issue(s) found (max severity: {max_severity})"
+    
+    return (status, description)
+
+
 def handle_pull_request(payload: dict):
     """
     Handle pull_request webhook event.
@@ -833,30 +861,16 @@ def handle_pull_request(payload: dict):
                 logger.warning(f"⚠️  Failed to generate SARIF report")
 
         # Determine final status based on severities
+        status, description = determine_commit_status(all_issues)
+        
         if all_issues:
-            severity_counts = comment_poster._count_severities(all_issues)
-            max_severity = get_max_severity(all_issues)
-            total_count = len(all_issues)
-
-            if max_severity == "critical":
-                status = "failure"
-                description = f"{total_count} issue(s) found (max severity: {max_severity})"
-            else:
-                status = "neutral"
-                description = f"{total_count} issue(s) found (max severity: {max_severity})"
-
             comment_poster.post_commit_status(
                 repo_owner, repo_name, head_sha, status, description, headers
             )
         else:
             logger.info("No issues found - posting success status")
             comment_poster.post_commit_status(
-                repo_owner,
-                repo_name,
-                head_sha,
-                "success",
-                "No accessibility issues found",
-                headers,
+                repo_owner, repo_name, head_sha, status, description, headers
             )
 
         logger.info("✅ Review complete")

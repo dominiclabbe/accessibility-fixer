@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import patch, Mock
 from app.pr_reviewer import PRReviewer
 from app.comment_poster import CommentPoster
-from app.webhook_server import get_max_severity
+from app.webhook_server import get_max_severity, determine_commit_status
 
 
 class TestSeverityNormalization:
@@ -283,12 +283,9 @@ class TestCommitStatusLogic:
 
     def test_commit_status_no_issues_returns_success(self):
         """Test that 0 issues results in 'success' status."""
-        # This would be tested at integration level, but we can verify the logic
         issues = []
         
-        if not issues:
-            status = "success"
-            description = "No accessibility issues found"
+        status, description = determine_commit_status(issues)
         
         assert status == "success"
         assert "No accessibility issues found" in description
@@ -301,11 +298,7 @@ class TestCommitStatusLogic:
             {"severity": "major"},
         ]
         
-        max_sev = get_max_severity(issues)
-        
-        if max_sev == "critical":
-            status = "failure"
-            description = f"{len(issues)} issue(s) found (max severity: {max_sev})"
+        status, description = determine_commit_status(issues)
         
         assert status == "failure"
         assert "3 issue(s) found (max severity: critical)" in description
@@ -320,11 +313,8 @@ class TestCommitStatusLogic:
         ]
         
         for issues in test_cases:
+            status, description = determine_commit_status(issues)
             max_sev = get_max_severity(issues)
-            
-            if max_sev != "critical":
-                status = "neutral"
-                description = f"{len(issues)} issue(s) found (max severity: {max_sev})"
             
             assert status == "neutral"
             assert f"{len(issues)} issue(s) found (max severity: {max_sev})" in description
@@ -337,9 +327,8 @@ class TestCommitStatusLogic:
             {"severity": "minor"},
         ]
         
-        max_sev = get_max_severity(issues)
-        description = f"{len(issues)} issue(s) found (max severity: {max_sev})"
+        status, description = determine_commit_status(issues)
         
         assert "3 issue(s) found (max severity: major)" in description
         assert "max severity:" in description
-        assert str(len(issues)) in description
+        assert "3 issue(s)" in description
