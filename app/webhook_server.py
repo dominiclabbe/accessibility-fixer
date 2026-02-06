@@ -539,9 +539,6 @@ def handle_pull_request(payload: dict):
 
         # Track phase state for multi-platform reviews
         phase_state = {"current_phase": 0, "total_phases": len(platforms_in_order)}
-        logger.info(
-            f"Found {len(review_threads)} review threads (for resolution validation)"
-        )
 
         def is_near_existing_comment(
             file_path: str, line: int, issue: Dict = None, range_threshold: int = 5
