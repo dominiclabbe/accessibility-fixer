@@ -102,11 +102,10 @@ class PRReviewer:
         if debug_web_review:
             from app.constants import WEB_EXTENSIONS
             web_extensions = WEB_EXTENSIONS
+            # DEBUG_WEB_REVIEW: Track processed batches
+            processed_batches = 0
         else:
             web_extensions = set()
-
-        # DEBUG_WEB_REVIEW: Track processed batches
-        processed_batches = 0
 
         for batch_idx, file_batch in enumerate(batches):
             # DEBUG_WEB_REVIEW: Log batch BEGIN
@@ -266,14 +265,12 @@ class PRReviewer:
                 deduped = self._dedupe_issues(all_issues)
                 if deduped:
                     # DEBUG_WEB_REVIEW: Wrap callback in try/except for exception tracing
-                    if debug_web_review:
-                        try:
-                            on_batch_complete(deduped)
-                        except Exception:
-                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1}):")
-                            raise
-                    else:
+                    try:
                         on_batch_complete(deduped)
+                    except Exception:
+                        if debug_web_review:
+                            logger.exception(f"[DEBUG_WEB_REVIEW] Exception in on_batch_complete (periodic, batch {batch_idx + 1}):")
+                        raise
                     all_issues = []
 
         # DEBUG_WEB_REVIEW: Log summary after batch loop
@@ -288,14 +285,12 @@ class PRReviewer:
             deduped = self._dedupe_issues(all_issues)
             if deduped:
                 # DEBUG_WEB_REVIEW: Wrap callback in try/except for exception tracing
-                if debug_web_review:
-                    try:
-                        on_batch_complete(deduped)
-                    except Exception:
-                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final):")
-                        raise
-                else:
+                try:
                     on_batch_complete(deduped)
+                except Exception:
+                    if debug_web_review:
+                        logger.exception("[DEBUG_WEB_REVIEW] Exception in on_batch_complete (final):")
+                    raise
             return []
 
         return self._dedupe_issues(all_issues)
