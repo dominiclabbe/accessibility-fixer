@@ -22,15 +22,15 @@ PLATFORM_ORDER = ["Android", "iOS", "Web", "React Native", "Flutter"]
 def detect_react_native_in_diff(file_path: str, pr_diff: str) -> bool:
     """
     Detect if a file is React Native by analyzing its diff content.
-    
+
     Strong signals for React Native:
     - import/require from 'react-native'
     - RN component tags like <View>, <Text>, <TouchableOpacity>
-    
+
     Args:
         file_path: Path to the file
         pr_diff: Full PR diff
-        
+
     Returns:
         True if file is detected as React Native
     """
@@ -38,18 +38,18 @@ def detect_react_native_in_diff(file_path: str, pr_diff: str) -> bool:
     file_diff = DiffParser.filter_diff_for_files(pr_diff, [file_path])
     if not file_diff:
         return False
-    
+
     # Check for React Native imports
     rn_import_patterns = [
         r"from\s+['\"]react-native['\"]",
         r"require\s*\(['\"]react-native['\"]\)",
     ]
-    
+
     for pattern in rn_import_patterns:
         if re.search(pattern, file_diff):
             logger.debug(f"Detected React Native import in {file_path}")
             return True
-    
+
     # Check for React Native component tags
     # Look for common RN components in JSX/TSX
     rn_components = [
@@ -63,30 +63,32 @@ def detect_react_native_in_diff(file_path: str, pr_diff: str) -> bool:
         r"<SafeAreaView[\s>]",
         r"<Pressable[\s>]",
     ]
-    
+
     for component_pattern in rn_components:
         if re.search(component_pattern, file_diff):
             logger.debug(f"Detected React Native component in {file_path}")
             return True
-    
+
     return False
 
 
-def bucket_files_by_platform(changed_files: List[str], pr_diff: str) -> Dict[str, List[str]]:
+def bucket_files_by_platform(
+    changed_files: List[str], pr_diff: str
+) -> Dict[str, List[str]]:
     """
     Bucket files by platform based on extension and content.
-    
+
     File bucketing rules:
     - Android: .kt, .java
     - iOS: .swift, .m, .mm
     - Flutter: .dart
     - Web: .css, .html (unconditional)
     - Web/React Native: .tsx, .jsx, .ts, .js (content-based detection)
-    
+
     Args:
         changed_files: List of changed file paths
         pr_diff: Full PR diff for content-based detection
-        
+
     Returns:
         Dict mapping platform name to list of files
     """
@@ -97,92 +99,154 @@ def bucket_files_by_platform(changed_files: List[str], pr_diff: str) -> Dict[str
         "React Native": [],
         "Flutter": [],
     }
-    
+
     for file_path in changed_files:
         ext = Path(file_path).suffix.lower()
-        
+
         # Android
         if ext in [".kt", ".java"]:
             buckets["Android"].append(file_path)
-            
+
         # iOS
         elif ext in [".swift", ".m", ".mm"]:
             buckets["iOS"].append(file_path)
-            
+
         # Flutter
         elif ext == ".dart":
             buckets["Flutter"].append(file_path)
-            
+
         # Web unconditional
         elif ext in [".css", ".html"]:
             buckets["Web"].append(file_path)
-            
+
         # Web-ish: requires content-based detection
         elif ext in [".tsx", ".jsx", ".ts", ".js"]:
             if detect_react_native_in_diff(file_path, pr_diff):
                 buckets["React Native"].append(file_path)
             else:
                 buckets["Web"].append(file_path)
-        
+
         else:
             # Unknown extension, skip
             logger.debug(f"Skipping file with unknown extension: {file_path}")
-    
+
     # Log bucketing results
     for platform in PLATFORM_ORDER:
         if buckets[platform]:
             logger.info(f"Bucketed {len(buckets[platform])} files for {platform}")
-    
+
     return buckets
 
 
 def get_platforms_in_order(buckets: Dict[str, List[str]]) -> List[str]:
     """
     Get list of platforms that have files, in the strict order.
-    
+
     Args:
         buckets: Dict mapping platform name to list of files
-        
+
     Returns:
         List of platform names in order that have files
     """
     return [platform for platform in PLATFORM_ORDER if buckets[platform]]
 
 
-def filter_locations_for_files(
-    locations: List, 
-    file_paths: List[str]
-) -> List:
+def normalize_path(path: str) -> str:
+    """
+    Normalize a file path for consistent comparison.
+
+    - Converts backslashes to forward slashes
+    - Strips leading slash
+    - Returns lowercase for case-insensitive comparison
+
+    Args:
+        path: File path to normalize
+
+    Returns:
+        Normalized path
+    """
+    if not path:
+        return ""
+
+    # Convert backslashes to forward slashes
+    normalized = path.replace("\\", "/")
+
+    # Strip leading slash
+    if normalized.startswith("/"):
+        normalized = normalized[1:]
+
+    return normalized
+
+
+def extract_path_from_entry(entry) -> str:
+    """
+    Extract file path from various entry formats.
+
+    Supports:
+    - Tuples: (file, line, ...) where file is first element
+    - Dicts: {'file': ...}, {'path': ...}, {'file_path': ...}
+    - Nested: {'comment': {'path': ...}}
+
+    Args:
+        entry: Location entry (tuple or dict)
+
+    Returns:
+        Extracted file path or empty string if not found
+    """
+    if isinstance(entry, tuple) and len(entry) >= 1:
+        return str(entry[0])
+    elif isinstance(entry, dict):
+        # Try multiple key names
+        path = entry.get("path") or entry.get("file") or entry.get("file_path")
+
+        # If not found at top level, try nested comment object
+        if not path and "comment" in entry:
+            comment = entry["comment"]
+            if isinstance(comment, dict):
+                path = (
+                    comment.get("path")
+                    or comment.get("file")
+                    or comment.get("file_path")
+                )
+
+        return str(path) if path else ""
+
+    return ""
+
+
+def filter_locations_for_files(locations: List, file_paths: List[str]) -> List:
     """
     Filter a list of locations (comments/threads) to only include those
     matching the given file paths.
-    
+
     Supports multiple entry formats:
     - Tuples: (file, line, ...) where file is first element
-    - Dicts: {'file': ...} or {'path': ...}
-    
+    - Dicts: {'file': ...} or {'path': ...} or {'file_path': ...}
+    - Nested: {'comment': {'path': ...}}
+
+    Paths are normalized before comparison:
+    - Backslashes converted to forward slashes
+    - Leading slashes stripped
+
     Args:
         locations: List of location entries (tuples or dicts)
         file_paths: List of file paths to include
-        
+
     Returns:
         Filtered list of locations
     """
     if not locations:
         return []
-    
-    file_set = set(file_paths)
+
+    # Normalize file paths for comparison
+    normalized_file_set = {normalize_path(f) for f in file_paths}
     filtered = []
-    
+
     for entry in locations:
-        file_path = None
-        
-        if isinstance(entry, tuple) and len(entry) >= 1:
-            file_path = entry[0]
-        elif isinstance(entry, dict):
-            file_path = entry.get("file") or entry.get("path")
-        
-        if file_path and file_path in file_set:
+        file_path = extract_path_from_entry(entry)
+        normalized_path = normalize_path(file_path)
+
+        if normalized_path and normalized_path in normalized_file_set:
             filtered.append(entry)
-    
+
     return filtered
