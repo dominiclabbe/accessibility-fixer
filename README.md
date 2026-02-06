@@ -195,6 +195,21 @@ cp /path/to/accessibility-fixer/ci-examples/github-actions-anthropic.yml \
 - Unchanged code
 - Non-UI code (business logic, APIs)
 
+### 🔄 Platform-Phased Reviews
+
+For PRs with multiple platforms, reviews are automatically performed in phases to reduce AI context size and improve accuracy:
+
+**Review Order:**
+1. **Android** → 2. **iOS** → 3. **Web** → 4. **React Native** → 5. **Flutter**
+
+**Benefits:**
+- ✅ **Smaller Context**: ~75% reduction in prompt size per review
+- ✅ **Better Accuracy**: AI focuses on one platform's patterns at a time
+- ✅ **Handles Larger PRs**: Can review more files without exceeding limits
+- ✅ **Content Detection**: Automatically distinguishes Web vs React Native files
+
+**See [PLATFORM_PHASED_REVIEWS.md](PLATFORM_PHASED_REVIEWS.md) for complete details.**
+
 ### PR Comments Example
 
 The command posts inline comments like:
