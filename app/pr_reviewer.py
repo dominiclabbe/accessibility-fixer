@@ -528,7 +528,14 @@ class PRReviewer:
                 "If no issues found, return: []",
                 "",
                 "Each issue must have these keys (all values MUST be strings, except line which must be a number):",
-                'file, line, severity ("Critical|High|Medium|Low"), wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
+                'file, line, severity, wcag_sc, wcag_level, title, description, impact, current_code, suggested_fix, resources.',
+                "",
+                "Severity field MUST be one of: critical, major, minor, info",
+                "Choose severity based on:",
+                "  - critical: Blocks essential functionality for users with disabilities (e.g., inaccessible forms, missing screen reader labels on primary actions)",
+                "  - major: Significantly impacts user experience but workarounds may exist (e.g., poor contrast, missing alt text on important images)",
+                "  - minor: Noticeable but doesn't prevent task completion (e.g., suboptimal focus indicators, minor labeling improvements)",
+                "  - info: Best practice suggestions or enhancements (e.g., additional ARIA attributes, semantic HTML improvements)",
                 "",
                 "OPTIONAL field (highly recommended for accurate inline comment placement):",
                 "- anchor_text: An exact substring/line from the diff that identifies WHERE to place the comment.",
@@ -643,9 +650,24 @@ class PRReviewer:
         normalized["wcag_level"] = "" if wcag_level is None else str(wcag_level)
 
         # Ensure other fields are strings
-        for k in ["file", "severity", "title", "description", "impact"]:
+        for k in ["file", "title", "description", "impact"]:
             v = normalized.get(k, "")
             normalized[k] = "" if v is None else str(v)
+        
+        # Handle severity field with normalization
+        severity = normalized.get("severity", "")
+        if not severity or severity is None:
+            severity = "minor"
+        else:
+            severity = str(severity).lower()
+        
+        # Validate severity and coerce to allowed values
+        allowed_severities = ["info", "minor", "major", "critical"]
+        if severity not in allowed_severities:
+            logger.debug(f"Unknown severity value '{severity}', coercing to 'minor'")
+            severity = "minor"
+        
+        normalized["severity"] = severity
 
         # line should be int
         line = normalized.get("line", 0)

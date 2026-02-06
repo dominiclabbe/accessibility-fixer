@@ -337,6 +337,56 @@ def webhook():
     return jsonify({"message": "Event ignored"}), 200
 
 
+def get_max_severity(issues: list) -> str:
+    """
+    Determine the maximum severity from a list of issues.
+    
+    Args:
+        issues: List of issue dictionaries with 'severity' field
+        
+    Returns:
+        Maximum severity level: "critical", "major", "minor", or "info"
+    """
+    severity_order = ["info", "minor", "major", "critical"]
+    max_severity = "info"
+    
+    for issue in issues:
+        severity = issue.get("severity", "minor")
+        if severity in severity_order:
+            if severity_order.index(severity) > severity_order.index(max_severity):
+                max_severity = severity
+    
+    return max_severity
+
+
+def determine_commit_status(issues: list) -> tuple:
+    """
+    Determine commit status and description based on issues.
+    
+    Args:
+        issues: List of issue dictionaries
+        
+    Returns:
+        Tuple of (status, description) where:
+        - status is "success", "neutral", or "failure"
+        - description is a string describing the result
+    """
+    if not issues:
+        return ("success", "No accessibility issues found")
+    
+    max_severity = get_max_severity(issues)
+    total_count = len(issues)
+    
+    if max_severity == "critical":
+        status = "failure"
+    else:
+        status = "neutral"
+    
+    description = f"{total_count} issue(s) found (max severity: {max_severity})"
+    
+    return (status, description)
+
+
 def handle_pull_request(payload: dict):
     """
     Handle pull_request webhook event.
@@ -811,33 +861,16 @@ def handle_pull_request(payload: dict):
                 logger.warning(f"⚠️  Failed to generate SARIF report")
 
         # Determine final status based on severities
+        status, description = determine_commit_status(all_issues)
+        
         if all_issues:
-            severity_counts = comment_poster._count_severities(all_issues)
-            critical_count = severity_counts.get("Critical", 0)
-            high_count = severity_counts.get("High", 0)
-
-            if critical_count > 0:
-                status = "failure"
-                description = f"Found {critical_count} critical accessibility issue(s)"
-            elif high_count > 0:
-                status = "success"  # Don't block on high priority
-                description = f"Found {high_count} high priority issue(s)"
-            else:
-                status = "success"
-                description = f"Found {len(all_issues)} accessibility issue(s)"
-
             comment_poster.post_commit_status(
                 repo_owner, repo_name, head_sha, status, description, headers
             )
         else:
             logger.info("No issues found - posting success status")
             comment_poster.post_commit_status(
-                repo_owner,
-                repo_name,
-                head_sha,
-                "success",
-                "No accessibility issues found",
-                headers,
+                repo_owner, repo_name, head_sha, status, description, headers
             )
 
         logger.info("✅ Review complete")

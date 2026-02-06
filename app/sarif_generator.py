@@ -22,10 +22,10 @@ class SARIFGenerator:
 
     # Map severity levels to SARIF levels
     SEVERITY_MAP = {
-        "Critical": "error",
-        "High": "error",
-        "Medium": "warning",
-        "Low": "note",
+        "critical": "error",
+        "major": "error",
+        "minor": "warning",
+        "info": "note",
     }
 
     @staticmethod
@@ -146,7 +146,7 @@ class SARIFGenerator:
             # Extract fields
             file_path = issue.get("file", "")
             line = issue.get("line", 1)
-            severity = issue.get("severity", "Medium")
+            severity = issue.get("severity", "minor")
             wcag_sc = issue.get("wcag_sc", "")
             wcag_level = issue.get("wcag_level", "")
             title = issue.get("title", "Accessibility Issue")
