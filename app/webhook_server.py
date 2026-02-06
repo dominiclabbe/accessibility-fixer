@@ -24,6 +24,11 @@ from app.guide_loader import GuideLoader
 from app.pr_reviewer import create_reviewer_from_env, PRReviewer
 from app.comment_poster import CommentPoster
 from app.sarif_generator import generate_and_write_sarif
+from app.platform_bucketing import (
+    bucket_files_by_platform,
+    get_platforms_in_order,
+    filter_locations_for_files,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -430,30 +435,42 @@ def handle_pull_request(payload: dict):
             )
             return jsonify({"message": "No reviewable files"}), 200
 
-        # Detect platforms
-        platforms = PRReviewer.detect_platforms(changed_files)
-        logger.info(f"Detected platforms: {platforms}")
-
-        # Load guides
-        logger.info("Loading accessibility guides...")
-        guides = guide_loader.load_platform_specific_guides(platforms)
-        logger.info(f"Loaded guides: {len(guides)} characters")
-
-        # Get PR diff
+        # Get PR diff (needed early for content-based detection)
         logger.info("Fetching PR diff...")
         pr_diff = get_pr_diff(
             repo_owner, repo_name, pr_number, base_sha, head_sha, headers
         )
         logger.info(f"Diff size: {len(pr_diff)} characters")
 
-        # Track all issues and posted locations for final status
+        # Bucket files by platform using content-based detection
+        logger.info("Bucketing files by platform...")
+        platform_buckets = bucket_files_by_platform(changed_files, pr_diff)
+        platforms_in_order = get_platforms_in_order(platform_buckets)
+        
+        if not platforms_in_order:
+            logger.info("No files matched any platform. Skipping review.")
+            comment_poster.post_commit_status(
+                repo_owner,
+                repo_name,
+                head_sha,
+                "success",
+                "No files matched any platform",
+                headers,
+            )
+            return jsonify({"message": "No platform files"}), 200
+        
+        logger.info(f"Platforms detected (in review order): {platforms_in_order}")
+        for platform in platforms_in_order:
+            logger.info(f"  {platform}: {len(platform_buckets[platform])} files")
+
+        # Track all issues and posted locations globally across all phases
         all_issues = []
         # Fetch existing comments once at the start to avoid re-posting
         existing_locations = comment_poster._get_existing_comment_locations(
             repo_owner, repo_name, pr_number, headers
         )
         logger.info(f"Found {len(existing_locations)} existing comment locations")
-        posted_locations = set(existing_locations)  # Track what we've posted
+        posted_locations = set(existing_locations)  # Track what we've posted globally
 
         # Fetch review threads including replies for AI to validate resolutions
         review_threads = comment_poster.get_review_threads(
@@ -715,24 +732,64 @@ def handle_pull_request(payload: dict):
                 skip_existing_check=True,  # We already filtered above
             )
 
-        # Review PR with progressive commenting
-        logger.info("Starting accessibility review...")
-        remaining_issues = pr_reviewer.review_pr_diff(
-            pr_diff,
-            changed_files,
-            platforms,
-            guides,
-            on_batch_complete=post_batch_comments,
-            existing_comments=list(existing_locations),
-            review_threads=review_threads,
-        )
-
-        # Add any remaining issues (if callback wasn't used)
-        if remaining_issues:
-            all_issues.extend(remaining_issues)
+        # Perform phased review - one platform at a time
+        logger.info("Starting platform-phased accessibility review...")
+        
+        for phase_idx, platform in enumerate(platforms_in_order, 1):
+            logger.info(f"\n{'='*80}")
+            logger.info(f"PHASE {phase_idx}/{len(platforms_in_order)}: Reviewing {platform}")
+            logger.info(f"{'='*80}")
+            
+            # Get files for this platform
+            platform_files = platform_buckets[platform]
+            logger.info(f"Files in this phase: {len(platform_files)}")
+            
+            # Load platform-specific guides (single platform only)
+            logger.info(f"Loading {platform}-specific guides...")
+            platform_guides = guide_loader.load_platform_specific_guides([platform])
+            logger.info(f"Loaded guides: {len(platform_guides)} characters")
+            
+            # Filter existing_comments to only include files in this phase
+            phase_existing_comments = filter_locations_for_files(
+                list(existing_locations), 
+                platform_files
+            )
+            logger.info(
+                f"Filtered existing comments: {len(phase_existing_comments)} "
+                f"(out of {len(existing_locations)} total)"
+            )
+            
+            # Filter review_threads to only include files in this phase
+            phase_review_threads = filter_locations_for_files(
+                review_threads,
+                platform_files
+            )
+            logger.info(
+                f"Filtered review threads: {len(phase_review_threads)} "
+                f"(out of {len(review_threads)} total)"
+            )
+            
+            # Review this platform's files
+            remaining_issues = pr_reviewer.review_pr_diff(
+                pr_diff,
+                platform_files,
+                [platform],  # Single platform only
+                platform_guides,
+                on_batch_complete=post_batch_comments,
+                existing_comments=phase_existing_comments,
+                review_threads=phase_review_threads,
+            )
+            
+            # Add any remaining issues (if callback wasn't used)
+            if remaining_issues:
+                all_issues.extend(remaining_issues)
+            
+            logger.info(f"Phase {phase_idx} complete. Total issues so far: {len(all_issues)}")
 
         logger.info(
-            f"Review complete. Found {len(all_issues)} total accessibility issues"
+            f"\n{'='*80}\n"
+            f"All phases complete. Found {len(all_issues)} total accessibility issues\n"
+            f"{'='*80}"
         )
 
         # Generate SARIF output if requested
