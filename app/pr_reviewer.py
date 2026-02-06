@@ -116,7 +116,18 @@ class PRReviewer:
             # Get diff for this batch using proper diff parser
             batch_diff = DiffParser.filter_diff_for_files(pr_diff, file_batch)
             if not batch_diff:
-                print(f"  No diff content for batch {batch_idx + 1}, skipping")
+                # DEBUG_WEB_REVIEW: Enhanced diagnostics when batch is skipped
+                if debug_web_review:
+                    # Extract all diff file paths from pr_diff
+                    import re
+                    diff_file_paths = re.findall(r'^\+\+\+ b/(.+)$', pr_diff, re.MULTILINE)
+                    
+                    logger.info(f"[DEBUG_WEB_REVIEW] No diff content for batch {batch_idx + 1}/{len(batches)} - skipping")
+                    logger.info(f"[DEBUG_WEB_REVIEW]   Requested files in batch: {file_batch}")
+                    logger.info(f"[DEBUG_WEB_REVIEW]   Total diff file headers found: {len(diff_file_paths)}")
+                    logger.info(f"[DEBUG_WEB_REVIEW]   First 10 diff paths: {diff_file_paths[:10]}")
+                else:
+                    print(f"  No diff content for batch {batch_idx + 1}, skipping")
                 continue
 
             # Truncate if too large

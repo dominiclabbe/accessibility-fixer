@@ -67,6 +67,9 @@ class DiffParser:
         """
         Filter diff to only include specified files.
 
+        Implements path normalization to handle cases where requested paths
+        differ from diff paths by leading directory components.
+
         Args:
             full_diff: Full unified diff text
             file_paths: List of file paths to include
@@ -77,14 +80,67 @@ class DiffParser:
         if not file_paths:
             return ""
 
+        debug_web_review = os.getenv("DEBUG_WEB_REVIEW", "").lower() in ["1", "true", "yes"]
+        
         file_set = set(file_paths)
         parsed = DiffParser.parse_diff(full_diff)
+        diff_paths = list(parsed.keys())
+
+        # DEBUG_WEB_REVIEW: Log path matching details
+        if debug_web_review:
+            logger.info("[DEBUG_WEB_REVIEW] filter_diff_for_files called")
+            logger.info(f"  Requested files ({len(file_paths)}): {file_paths}")
+            logger.info(f"  Diff paths found ({len(diff_paths)}): {diff_paths}")
 
         # Collect diffs for requested files
         filtered_sections = []
         for file_path in file_paths:
+            matched_diff_path = None
+            
+            # 1. Try exact match first
             if file_path in parsed:
-                filtered_sections.append(parsed[file_path])
+                matched_diff_path = file_path
+                if debug_web_review:
+                    logger.info(f"  [{file_path}] Exact match found")
+            else:
+                # 2. Try suffix matching (handles different leading directory components)
+                # Only use suffix match if it's unambiguous (exactly one match)
+                suffix_matches = []
+                for diff_path in diff_paths:
+                    # Check if either path is a suffix of the other
+                    if diff_path.endswith('/' + file_path) or file_path.endswith('/' + diff_path):
+                        suffix_matches.append(diff_path)
+                    # Also check without leading slash for edge cases
+                    elif diff_path.endswith(file_path) or file_path.endswith(diff_path):
+                        # But only if they differ in directory components
+                        if '/' in file_path or '/' in diff_path:
+                            suffix_matches.append(diff_path)
+                
+                if len(suffix_matches) == 1:
+                    matched_diff_path = suffix_matches[0]
+                    if debug_web_review:
+                        logger.info(f"  [{file_path}] Suffix match: {matched_diff_path}")
+                elif len(suffix_matches) > 1:
+                    if debug_web_review:
+                        logger.info(f"  [{file_path}] Multiple suffix matches, skipping: {suffix_matches}")
+                else:
+                    # 3. Last resort: basename matching (only if unique)
+                    file_basename = os.path.basename(file_path)
+                    basename_matches = [dp for dp in diff_paths if os.path.basename(dp) == file_basename]
+                    
+                    if len(basename_matches) == 1:
+                        matched_diff_path = basename_matches[0]
+                        if debug_web_review:
+                            logger.info(f"  [{file_path}] Basename match: {matched_diff_path}")
+                    elif len(basename_matches) > 1:
+                        if debug_web_review:
+                            logger.info(f"  [{file_path}] Ambiguous basename matches: {basename_matches}")
+                    else:
+                        if debug_web_review:
+                            logger.info(f"  [{file_path}] No match found")
+            
+            if matched_diff_path:
+                filtered_sections.append(parsed[matched_diff_path])
 
         return '\n'.join(filtered_sections)
 

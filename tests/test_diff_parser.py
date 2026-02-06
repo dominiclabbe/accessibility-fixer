@@ -446,5 +446,154 @@ index 1234567..abcdefg 100644
         assert "file_not_in_batch" in captured.out
 
 
+class TestPathNormalization:
+    """Tests for path normalization in filter_diff_for_files."""
+
+    def test_suffix_match_when_diff_has_shorter_path(self):
+        """Test suffix matching when diff has '+++ b/src/components/Main.tsx'
+        but requested file is 'web/src/components/Main.tsx'."""
+        diff = """diff --git a/src/components/Main.tsx b/src/components/Main.tsx
+index 1234567..abcdefg 100644
+--- a/src/components/Main.tsx
++++ b/src/components/Main.tsx
+@@ -1,3 +1,5 @@
++import React from 'react';
++
+ export function Main() {
+   return <div>Main</div>;
+ }
+"""
+        parser = DiffParser()
+        
+        # Request with different leading path component
+        filtered = parser.filter_diff_for_files(diff, ["web/src/components/Main.tsx"])
+        
+        # Should match because 'src/components/Main.tsx' is suffix of 'web/src/components/Main.tsx'
+        assert "Main.tsx" in filtered
+        assert "import React" in filtered
+
+    def test_suffix_match_when_requested_has_shorter_path(self):
+        """Test suffix matching when diff has '+++ b/web/src/components/Main.tsx'
+        but requested file is 'src/components/Main.tsx'."""
+        diff = """diff --git a/web/src/components/Main.tsx b/web/src/components/Main.tsx
+index 1234567..abcdefg 100644
+--- a/web/src/components/Main.tsx
++++ b/web/src/components/Main.tsx
+@@ -1,3 +1,5 @@
++import React from 'react';
++
+ export function Main() {
+   return <div>Main</div>;
+ }
+"""
+        parser = DiffParser()
+        
+        # Request with shorter path
+        filtered = parser.filter_diff_for_files(diff, ["src/components/Main.tsx"])
+        
+        # Should match because 'src/components/Main.tsx' is suffix of 'web/src/components/Main.tsx'
+        assert "Main.tsx" in filtered
+        assert "import React" in filtered
+
+    def test_basename_match_when_unique(self):
+        """Test basename matching when only one file has that basename."""
+        diff = """diff --git a/web/components/Button.tsx b/web/components/Button.tsx
+index 1234567..abcdefg 100644
+--- a/web/components/Button.tsx
++++ b/web/components/Button.tsx
+@@ -1,3 +1,4 @@
++import React from 'react';
+ export function Button() {}
+"""
+        parser = DiffParser()
+        
+        # Request with just basename (should match if unique)
+        filtered = parser.filter_diff_for_files(diff, ["Button.tsx"])
+        
+        # Should match because only one Button.tsx exists
+        assert "Button.tsx" in filtered
+        assert "import React" in filtered
+
+    def test_ambiguous_basename_no_match(self):
+        """Test that basename matching doesn't match when multiple files
+        have the same basename."""
+        diff = """diff --git a/web/components/Main.tsx b/web/components/Main.tsx
+index 1111111..2222222 100644
+--- a/web/components/Main.tsx
++++ b/web/components/Main.tsx
+@@ -1,3 +1,4 @@
++import React from 'react';
+ export function Main1() {}
+
+diff --git a/app/views/Main.tsx b/app/views/Main.tsx
+index 3333333..4444444 100644
+--- a/app/views/Main.tsx
++++ b/app/views/Main.tsx
+@@ -1,3 +1,4 @@
++import { Component } from 'react';
+ export function Main2() {}
+"""
+        parser = DiffParser()
+        
+        # Request with just basename when multiple exist - should not match
+        filtered = parser.filter_diff_for_files(diff, ["Main.tsx"])
+        
+        # Should be empty because basename is ambiguous
+        assert filtered == ""
+
+    def test_exact_match_preferred_over_suffix(self):
+        """Test that exact match is always preferred."""
+        diff = """diff --git a/src/components/Main.tsx b/src/components/Main.tsx
+index 1111111..2222222 100644
+--- a/src/components/Main.tsx
++++ b/src/components/Main.tsx
+@@ -1,3 +1,4 @@
++// Exact match
+ export function Main1() {}
+
+diff --git a/web/src/components/Main.tsx b/web/src/components/Main.tsx
+index 3333333..4444444 100644
+--- a/web/src/components/Main.tsx
++++ b/web/src/components/Main.tsx
+@@ -1,3 +1,4 @@
++// Suffix match
+ export function Main2() {}
+"""
+        parser = DiffParser()
+        
+        # Request exact match
+        filtered = parser.filter_diff_for_files(diff, ["src/components/Main.tsx"])
+        
+        # Should get exact match, not the suffix match
+        assert "// Exact match" in filtered
+        assert "// Suffix match" not in filtered
+
+    def test_multiple_suffix_matches_no_match(self):
+        """Test that ambiguous suffix matches are not used."""
+        diff = """diff --git a/web/src/Main.tsx b/web/src/Main.tsx
+index 1111111..2222222 100644
+--- a/web/src/Main.tsx
++++ b/web/src/Main.tsx
+@@ -1,3 +1,4 @@
++// First
+ export function Main1() {}
+
+diff --git a/app/src/Main.tsx b/app/src/Main.tsx
+index 3333333..4444444 100644
+--- a/app/src/Main.tsx
++++ b/app/src/Main.tsx
+@@ -1,3 +1,4 @@
++// Second
+ export function Main2() {}
+"""
+        parser = DiffParser()
+        
+        # Request with path that could match either via suffix
+        filtered = parser.filter_diff_for_files(diff, ["src/Main.tsx"])
+        
+        # Should be empty because multiple paths end with 'src/Main.tsx'
+        assert filtered == ""
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
